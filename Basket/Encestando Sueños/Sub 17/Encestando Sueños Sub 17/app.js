@@ -67,19 +67,19 @@ const TABLE_COLS = [
       const m = totStat('2PT_MADE') + totStat('3PT_MADE');
       const a = totStat('2PT_ATT')  + totStat('3PT_ATT');
       return fmtPct(a > 0 ? m/a : null);
-    }},
+    },
   { h:'3PT%',
     fn: p => fmtPct(threePct(p)),
     total: () => {
       const m = totStat('3PT_MADE'), a = totStat('3PT_ATT');
       return fmtPct(a > 0 ? m/a : null);
-    }},
+    },
   { h:'FT%',
     fn: p => fmtPct(ftPct(p)),
     total: () => {
       const m = totStat('FT_MADE'), a = totStat('FT_ATT');
       return fmtPct(a > 0 ? m/a : null);
-    }},
+    },
   { h:'R.Of',  fn: p => S.stats[p].REB_OFF,                   total: () => totStat('REB_OFF') },
   { h:'R.Def', fn: p => S.stats[p].REB_DEF,                   total: () => totStat('REB_DEF') },
   { h:'REB',   fn: p => S.stats[p].REB_OFF + S.stats[p].REB_DEF,
@@ -772,51 +772,51 @@ async function newGame() {
 const FB_BASE = 'https://titans-tracker-default-rtdb.firebaseio.com';
 const FB_NODE = 'mba_sub17';
 
-async function fbGet() {{
-  try {{
-    const res = await fetch(`${{FB_BASE}}/${{FB_NODE}}/history.json?orderBy="$key"`);
+async function fbGet() {
+  try {
+    const res = await fetch(`${FB_BASE}/${FB_NODE}/history.json?orderBy="$key"`);
     if (!res.ok) throw new Error('offline');
     const data = await res.json();
     if (!data) return [];
     return Object.entries(data)
       .sort(([a],[b]) => a.localeCompare(b))
-      .map(([fbKey, game]) => ({{...game, _fbKey: fbKey}}));
-  }} catch(e) {{
-    try {{ return JSON.parse(localStorage.getItem(HISTORY_KEY)||'[]'); }}
-    catch(_) {{ return []; }}
-  }}
-}}
+      .map(([fbKey, game]) => ({...game, _fbKey: fbKey}));
+  } catch(e) {
+    try { return JSON.parse(localStorage.getItem(HISTORY_KEY)||'[]'); }
+    catch(_) { return []; }
+  }
+}
 
-async function fbPush(game) {{
-  try {{
-    const res = await fetch(`${{FB_BASE}}/${{FB_NODE}}/history.json`, {{
+async function fbPush(game) {
+  try {
+    const res = await fetch(`${FB_BASE}/${FB_NODE}/history.json`, {
       method: 'POST',
-      headers: {{'Content-Type': 'application/json'}},
+      headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(game)
-    }});
-    const {{name: fbKey}} = await res.json();
-    try {{
+    });
+    const {name: fbKey} = await res.json();
+    try {
       const local = JSON.parse(localStorage.getItem(HISTORY_KEY)||'[]');
       local.push(game);
       localStorage.setItem(HISTORY_KEY, JSON.stringify(local));
-    }} catch(_) {{}}
+    } catch(_) {}
     return fbKey;
-  }} catch(e) {{
-    try {{
+  } catch(e) {
+    try {
       const local = JSON.parse(localStorage.getItem(HISTORY_KEY)||'[]');
       local.push(game);
       localStorage.setItem(HISTORY_KEY, JSON.stringify(local));
-    }} catch(_) {{}}
+    } catch(_) {}
     return null;
-  }}
-}}
+  }
+}
 
-async function fbDelete(fbKey) {{
+async function fbDelete(fbKey) {
   if (!fbKey) return;
-  try {{
-    await fetch(`${{FB_BASE}}/${{FB_NODE}}/history/${{fbKey}}.json`, {{method: 'DELETE'}});
-  }} catch(e) {{ console.warn('Delete failed (offline?):', e); }}
-}}
+  try {
+    await fetch(`${FB_BASE}/${FB_NODE}/history/${fbKey}.json`, {method: 'DELETE'});
+  } catch(e) { console.warn('Delete failed (offline?):', e); }
+}
 
 function loadHistory() {
   try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); }
