@@ -1529,6 +1529,20 @@ async function openTemplates() {
   _renderTplList(_tplCache);
 }
 
+function loadTemplate(idx) {
+  const t = _tplCache?.[idx];
+  if (!t) return;
+  if (!confirm(`¿Cargar la plantilla "${t.name}"?\nEsto reemplazará la nómina actual (los stats del partido actual se conservan).`)) return;
+  S.players = [...t.players];
+  S.players.forEach(ensurePlayer);
+  if (!S.players.includes(S.selected)) S.selected = S.players[0] || null;
+  renderAll();
+  scheduleSave();
+  document.getElementById('tplModal').hidden = true;
+  toast(`✓ Plantilla "${t.name}" cargada`);
+}
+
+
 async function deleteTemplate(idx) {
   if (!_tplCache?.[idx]) return;
   if (!confirm(`¿Eliminar la plantilla "${_tplCache[idx].name}"?`)) return;
