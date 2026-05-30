@@ -1435,6 +1435,7 @@ function registerSW() {
 ═══════════════════════════════════════════════════════════════════════════ */
 const TPL_KEY = 'mba_es15_tpl_v1';
 let _tplCache = null;
+let _defaultTplName = null;
 
 function _loadTemplatesLocal() {
   try { return JSON.parse(localStorage.getItem(TPL_KEY) || '[]'); }
@@ -1468,6 +1469,42 @@ async function fbSaveTemplates(templates) {
   } catch(e) { console.warn('Firebase templates save failed (offline?):', e); }
 }
 
+async function fbGetDefaultTemplate() {
+  try {
+    const res = await fetch(`${FB_BASE}/${FB_NODE}/defaultTemplate.json`);
+    if (!res.ok) throw new Error('offline');
+    const data = await res.json();
+    return typeof data === 'string' ? data : null;
+  } catch(e) {
+    try { return localStorage.getItem(TPL_KEY + '_default') || null; } catch(_) { return null; }
+  }
+}
+
+async function fbSetDefaultTemplate(name) {
+  try {
+    if (name) localStorage.setItem(TPL_KEY + '_default', name);
+    else localStorage.removeItem(TPL_KEY + '_default');
+  } catch(_) {}
+  try {
+    await fetch(`${FB_BASE}/${FB_NODE}/defaultTemplate.json`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(name)
+    });
+  } catch(e) { console.warn('Firebase default template save failed:', e); }
+}
+
+async function setDefaultTemplate(idx) {
+  const t = _tplCache?.[idx];
+  if (!t) return;
+  const newDefault = (_defaultTplName === t.name) ? null : t.name;
+  _defaultTplName = newDefault;
+  await fbSetDefaultTemplate(newDefault);
+  _renderTplList(_tplCache);
+  toast(newDefault ? `⭐ "${newDefault}" es la plantilla predeterminada` : 'Plantilla predeterminada eliminada');
+}
+
+
 function _renderTplList(templates) {
   const list = document.getElementById('tplList');
   if (!templates.length) {
@@ -1478,6 +1515,7 @@ function _renderTplList(templates) {
     <div class="tpl-row">
       <span class="tpl-name">${t.name}<small>(${t.players.length} jug.)</small></span>
       <button class="tpl-load-btn"  onclick="loadTemplate(${i})">Cargar</button>
+      <button class="tpl-default-btn" onclick="setDefaultTemplate(${i})" title="${_defaultTplName === t.name ? 'Quitar predeterminada' : 'Establecer como predeterminada'}">${_defaultTplName === t.name ? '⭐' : '☆'}</button>
       <button class="tpl-share-btn" onclick="shareTemplate(${i})" title="Compartir link">📤</button>
       <button class="tpl-del-btn"   onclick="deleteTemplate(${i})">✕</button>
     </div>`).join('');
@@ -1487,7 +1525,7 @@ async function openTemplates() {
   const modal = document.getElementById('tplModal');
   modal.hidden = false;
   document.getElementById('tplList').innerHTML = '<p class="tpl-empty" style="opacity:.5">Cargando...</p>';
-  _tplCache = await fbGetTemplates();
+  [_tplCache, _defaultTplName] = await Promise.all([fbGetTemplates(), fbGetDefaultTemplate()]);
   _renderTplList(_tplCache);
 }
 
@@ -1541,9 +1579,22 @@ async function checkImportTemplate() {
   } catch(e) { /* invalid param */ }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   checkImportTemplate();
-  loadSaved();
+  const hasSaved = loadSaved();
+  if (!hasSaved) {
+    // No saved game — apply default template if one is set
+    const _defTplName = await fbGetDefaultTemplate();
+    if (_defTplName) {
+      const _defTemplates = await fbGetTemplates();
+      const _defTpl = _defTemplates.find(t => t.name === _defTplName);
+      if (_defTpl) {
+        S.players = [..._defTpl.players];
+        S.players.forEach(ensurePlayer);
+        S.selected = S.players[0];
+      }
+    }
+  }
   renderAll();
   bindEvents();
   startInterval();
