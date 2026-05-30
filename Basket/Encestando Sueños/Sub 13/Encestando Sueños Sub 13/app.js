@@ -743,7 +743,7 @@ function manualLoad() {
   else               toast('No hay partido guardado');
 }
 
-function newGame() {
+async function newGame() {
   if (!confirm('¿Iniciar un nuevo partido?\n\nSe guardarán las estadísticas actuales en el historial.')) return;
 
   // Guardar partido actual al historial si tiene datos
@@ -751,7 +751,7 @@ function newGame() {
     const rivalScoreRaw = prompt('¿Cuántos puntos anotó el rival? (Enter para saltar)', '');
     const rivalScore    = rivalScoreRaw !== null && rivalScoreRaw.trim() !== '' ? parseInt(rivalScoreRaw) : null;
     const rivalName     = S.gameName.replace(/mba\s*vs\s*/i, '').trim() || '???';
-    saveToHistory(rivalName, rivalScore);
+    await saveToHistory(rivalName, rivalScore);
   }
 
   const opponent = prompt('Nombre del nuevo rival:', '___') || '___';
@@ -766,32 +766,81 @@ function newGame() {
    HISTORIAL DE PARTIDOS
 ═══════════════════════════════════════════════════════════════════════════ */
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   FIREBASE — Historial en la nube
+═══════════════════════════════════════════════════════════════════════════ */
+const FB_BASE = 'https://titans-tracker-default-rtdb.firebaseio.com';
+const FB_NODE = 'mba_sub13';
+
+async function fbGet() {{
+  try {{
+    const res = await fetch(`${{FB_BASE}}/${{FB_NODE}}/history.json?orderBy="$key"`);
+    if (!res.ok) throw new Error('offline');
+    const data = await res.json();
+    if (!data) return [];
+    return Object.entries(data)
+      .sort(([a],[b]) => a.localeCompare(b))
+      .map(([fbKey, game]) => ({{...game, _fbKey: fbKey}}));
+  }} catch(e) {{
+    try {{ return JSON.parse(localStorage.getItem(HISTORY_KEY)||'[]'); }}
+    catch(_) {{ return []; }}
+  }}
+}}
+
+async function fbPush(game) {{
+  try {{
+    const res = await fetch(`${{FB_BASE}}/${{FB_NODE}}/history.json`, {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify(game)
+    }});
+    const {{name: fbKey}} = await res.json();
+    try {{
+      const local = JSON.parse(localStorage.getItem(HISTORY_KEY)||'[]');
+      local.push(game);
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(local));
+    }} catch(_) {{}}
+    return fbKey;
+  }} catch(e) {{
+    try {{
+      const local = JSON.parse(localStorage.getItem(HISTORY_KEY)||'[]');
+      local.push(game);
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(local));
+    }} catch(_) {{}}
+    return null;
+  }}
+}}
+
+async function fbDelete(fbKey) {{
+  if (!fbKey) return;
+  try {{
+    await fetch(`${{FB_BASE}}/${{FB_NODE}}/history/${{fbKey}}.json`, {{method: 'DELETE'}});
+  }} catch(e) {{ console.warn('Delete failed (offline?):', e); }}
+}}
+
 function loadHistory() {
   try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); }
   catch(e) { return []; }
 }
 
-function saveToHistory(rivalName, rivalScore) {
-  try {
-    const history = loadHistory();
-    history.push({
-      date:         new Date().toLocaleDateString('es-ES'),
-      gameName:     S.gameName,
-      rivalName,
-      titansScore:  totalPts(),
-      rivalScore,
-      stats:        JSON.parse(JSON.stringify(S.stats)),
-      minutesPlayed:JSON.parse(JSON.stringify(S.minutesPlayed)),
-      fouledOut:    JSON.parse(JSON.stringify(S.fouledOut || {})),
-      players:      [...S.players],
-    });
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
-    toast('📚 Partido guardado en historial');
-  } catch(e) { console.warn('Error guardando historial:', e); }
+async function saveToHistory(rivalName, rivalScore) {
+  const game = {
+    date:          new Date().toLocaleDateString('es-ES'),
+    gameName:      S.gameName,
+    rivalName,
+    titansScore:   totalPts(),
+    rivalScore,
+    stats:         JSON.parse(JSON.stringify(S.stats)),
+    minutesPlayed: JSON.parse(JSON.stringify(S.minutesPlayed||{})),
+    fouledOut:     JSON.parse(JSON.stringify(S.fouledOut||{})),
+    players:       [...S.players],
+  };
+  await fbPush(game);
+  toast('📚 Partido guardado en historial');
 }
 
-function openHistorial() {
-  const history = loadHistory();
+async function openHistorial() {
+  const history = await fbGet();
 
   /* ── Season totals per player ── */
   const allPlayers = [...new Set(history.flatMap(g => g.players))];
