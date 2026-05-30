@@ -1444,6 +1444,30 @@ function _saveTemplatesLocal(templates) {
   localStorage.setItem(TPL_KEY, JSON.stringify(templates));
 }
 
+
+async function fbGetTemplates() {
+  try {
+    const res = await fetch(`${FB_BASE}/${FB_NODE}/templates.json`);
+    if (!res.ok) throw new Error('offline');
+    const data = await res.json();
+    if (!data) return [];
+    return Array.isArray(data) ? data : Object.values(data);
+  } catch(e) {
+    try { return JSON.parse(localStorage.getItem(TPL_KEY) || '[]'); } catch(_) { return []; }
+  }
+}
+
+async function fbSaveTemplates(templates) {
+  try { localStorage.setItem(TPL_KEY, JSON.stringify(templates)); } catch(_) {}
+  try {
+    await fetch(`${FB_BASE}/${FB_NODE}/templates.json`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(templates)
+    });
+  } catch(e) { console.warn('Firebase templates save failed (offline?):', e); }
+}
+
 function _renderTplList(templates) {
   const list = document.getElementById('tplList');
   if (!templates.length) {
@@ -1459,50 +1483,33 @@ function _renderTplList(templates) {
     </div>`).join('');
 }
 
-function openTemplates() {
+async function openTemplates() {
   const modal = document.getElementById('tplModal');
-  _tplCache = _loadTemplatesLocal();
-  _renderTplList(_tplCache);
   modal.hidden = false;
+  document.getElementById('tplList').innerHTML = '<p class="tpl-empty" style="opacity:.5">Cargando...</p>';
+  _tplCache = await fbGetTemplates();
+  _renderTplList(_tplCache);
 }
 
-function loadTemplate(idx) {
-  const t = _tplCache?.[idx];
-  if (!t) return;
-  if (!confirm(`¿Cargar plantilla "${t.name}"?\n\nSe reemplazarán los jugadores y se resetearán las estadísticas del partido actual.`)) return;
-  const players = [...t.players];
-  const oldHistory = S.history || [];
-  S.players       = players;
-  S.stats         = makeStats(players);
-  S.minutesPlayed = makeMinutes(players);
-  S.onCourt       = [];
-  S.fouledOut     = {};
-  S.selected      = players[0];
-  S.history       = oldHistory;
-  renderAll();
-  scheduleSave();
-  toast(`✓ Plantilla "${t.name}" cargada`);
-  document.getElementById('tplModal').hidden = true;
-}
-
-function deleteTemplate(idx) {
+async function deleteTemplate(idx) {
   if (!_tplCache?.[idx]) return;
   if (!confirm(`¿Eliminar la plantilla "${_tplCache[idx].name}"?`)) return;
   _tplCache.splice(idx, 1);
-  _saveTemplatesLocal(_tplCache);
+  await fbSaveTemplates(_tplCache);
   _renderTplList(_tplCache);
   toast('Plantilla eliminada');
 }
 
-function saveCurrentAsTemplate() {
+async function saveCurrentAsTemplate() {
   const name = prompt('Nombre de la plantilla:');
   if (!name?.trim()) return;
-  _tplCache = _loadTemplatesLocal();
+  _tplCache = await fbGetTemplates();
   _tplCache.push({ name: name.trim(), players: [...S.players] });
-  _saveTemplatesLocal(_tplCache);
+  await fbSaveTemplates(_tplCache);
   _renderTplList(_tplCache);
   toast(`✓ Plantilla "${name.trim()}" guardada`);
 }
+
 
 function shareTemplate(idx) {
   const t = _tplCache?.[idx];
@@ -1518,16 +1525,16 @@ function shareTemplate(idx) {
   } catch(e) { toast('Error al generar el link'); }
 }
 
-function checkImportTemplate() {
+async function checkImportTemplate() {
   const param = new URLSearchParams(location.search).get('tpl');
   if (!param) return;
   try {
     const t = JSON.parse(decodeURIComponent(escape(atob(param))));
     if (!t.name || !Array.isArray(t.players)) return;
-    const templates = _loadTemplatesLocal();
+    const templates = await fbGetTemplates();
     if (!templates.find(x => x.name === t.name)) {
       templates.push(t);
-      _saveTemplatesLocal(templates);
+      await fbSaveTemplates(templates);
       setTimeout(() => toast(`✓ Plantilla "${t.name}" importada automáticamente`), 800);
     }
     history.replaceState({}, '', location.pathname);
