@@ -1,5 +1,5 @@
 /* Service Worker — Titans Tracker */
-const CACHE = 'mba-es13-v2';
+const CACHE = 'mba-es13-v3';
 const CORE  = [
   './', './index.html', './style.css', './app.js',
   './manifest.json', './icon-192.svg', './icon-512.svg',

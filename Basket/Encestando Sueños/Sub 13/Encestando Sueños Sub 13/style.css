@@ -646,3 +646,7 @@ input  { border: none; outline: none; font-family: var(--font); color: var(--whi
 .tpl-action-btn:hover { background:#1a4a7a; }
 .ctrl-btn.tpl-btn { background:#2c5f8a; }
 .ctrl-btn.tpl-btn:hover { background:#3a7ab5; }
+
+.tpl-share-btn { background:none; color:var(--mid); border:1px solid var(--bg3);
+  border-radius:8px; padding:6px 9px; font-size:.82rem; cursor:pointer; }
+.tpl-share-btn:hover { background:#2c5f8a; color:#fff; border-color:#2c5f8a; }

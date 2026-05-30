@@ -1370,32 +1370,25 @@ function registerSW() {
 /* ═══════════════════════════════════════════════════════════════════════════
    INIT
 ═══════════════════════════════════════════════════════════════════════════ */
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   PLANTILLAS DE EQUIPO — cross-device via jsonblob
-═══════════════════════════════════════════════════════════════════════════ */
-const TEMPLATES_URL = 'https://jsonblob.com/api/jsonBlob/019e763e-40ff-7c54-9bcc-95890e810b94';
-let _tplCache = null;
-
-async function _fetchTemplates() {
-  try {
-    const r = await fetch(TEMPLATES_URL, { cache: 'no-store' });
-    if (!r.ok) throw new Error();
-    const d = await r.json();
-    _tplCache = d.templates || [];
-    return _tplCache;
-  } catch(e) { return _tplCache || []; }
+);
+  await _pushTemplates(templates);
+  _renderTplList(templates);
+  toast(`✓ Plantilla "${name.trim()}" guardada`);
 }
 
-async function _pushTemplates(templates) {
-  _tplCache = templates;
-  try {
-    await fetch(TEMPLATES_URL, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ templates })
-    });
-  } catch(e) { toast('Sin conexión — cambio no sincronizado'); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PLANTILLAS DE EQUIPO — localStorage + URL sharing
+═══════════════════════════════════════════════════════════════════════════ */
+const TPL_KEY = 'mba_es15_tpl_v1';
+let _tplCache = null;
+
+function _loadTemplatesLocal() {
+  try { return JSON.parse(localStorage.getItem(TPL_KEY) || '[]'); }
+  catch(e) { return []; }
+}
+function _saveTemplatesLocal(templates) {
+  localStorage.setItem(TPL_KEY, JSON.stringify(templates));
 }
 
 function _renderTplList(templates) {
@@ -1407,24 +1400,22 @@ function _renderTplList(templates) {
   list.innerHTML = templates.map((t, i) => `
     <div class="tpl-row">
       <span class="tpl-name">${t.name}<small>(${t.players.length} jug.)</small></span>
-      <button class="tpl-load-btn" onclick="loadTemplate(${i})">Cargar</button>
-      <button class="tpl-del-btn"  onclick="deleteTemplate(${i})">✕</button>
+      <button class="tpl-load-btn"  onclick="loadTemplate(${i})">Cargar</button>
+      <button class="tpl-share-btn" onclick="shareTemplate(${i})" title="Compartir link">📤</button>
+      <button class="tpl-del-btn"   onclick="deleteTemplate(${i})">✕</button>
     </div>`).join('');
 }
 
-async function openTemplates() {
+function openTemplates() {
   const modal = document.getElementById('tplModal');
-  const list  = document.getElementById('tplList');
-  list.innerHTML = '<p class="tpl-empty">Cargando...</p>';
+  _tplCache = _loadTemplatesLocal();
+  _renderTplList(_tplCache);
   modal.hidden = false;
-  const templates = await _fetchTemplates();
-  _renderTplList(templates);
 }
 
-async function loadTemplate(idx) {
-  const templates = _tplCache;
-  if (!templates?.[idx]) return;
-  const t = templates[idx];
+function loadTemplate(idx) {
+  const t = _tplCache?.[idx];
+  if (!t) return;
   if (!confirm(`¿Cargar plantilla "${t.name}"?\n\nSe reemplazarán los jugadores y se resetearán las estadísticas del partido actual.`)) return;
   const players = [...t.players];
   const oldHistory = S.history || [];
@@ -1441,28 +1432,57 @@ async function loadTemplate(idx) {
   document.getElementById('tplModal').hidden = true;
 }
 
-async function deleteTemplate(idx) {
-  const templates = _tplCache;
-  if (!templates?.[idx]) return;
-  if (!confirm(`¿Eliminar la plantilla "${templates[idx].name}"?`)) return;
-  templates.splice(idx, 1);
-  await _pushTemplates(templates);
-  _renderTplList(templates);
+function deleteTemplate(idx) {
+  if (!_tplCache?.[idx]) return;
+  if (!confirm(`¿Eliminar la plantilla "${_tplCache[idx].name}"?`)) return;
+  _tplCache.splice(idx, 1);
+  _saveTemplatesLocal(_tplCache);
+  _renderTplList(_tplCache);
   toast('Plantilla eliminada');
 }
 
-async function saveCurrentAsTemplate() {
+function saveCurrentAsTemplate() {
   const name = prompt('Nombre de la plantilla:');
   if (!name?.trim()) return;
-  toast('Guardando...');
-  const templates = await _fetchTemplates();
-  templates.push({ name: name.trim(), players: [...S.players] });
-  await _pushTemplates(templates);
-  _renderTplList(templates);
+  _tplCache = _loadTemplatesLocal();
+  _tplCache.push({ name: name.trim(), players: [...S.players] });
+  _saveTemplatesLocal(_tplCache);
+  _renderTplList(_tplCache);
   toast(`✓ Plantilla "${name.trim()}" guardada`);
 }
 
+function shareTemplate(idx) {
+  const t = _tplCache?.[idx];
+  if (!t) return;
+  try {
+    const enc = btoa(unescape(encodeURIComponent(JSON.stringify(t))));
+    const url = location.origin + location.pathname + '?tpl=' + enc;
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(url).then(() => toast('🔗 Link copiado — compartilo para importar en otro dispositivo'));
+    } else {
+      prompt('Copiá este link:', url);
+    }
+  } catch(e) { toast('Error al generar el link'); }
+}
+
+function checkImportTemplate() {
+  const param = new URLSearchParams(location.search).get('tpl');
+  if (!param) return;
+  try {
+    const t = JSON.parse(decodeURIComponent(escape(atob(param))));
+    if (!t.name || !Array.isArray(t.players)) return;
+    const templates = _loadTemplatesLocal();
+    if (!templates.find(x => x.name === t.name)) {
+      templates.push(t);
+      _saveTemplatesLocal(templates);
+      setTimeout(() => toast(`✓ Plantilla "${t.name}" importada automáticamente`), 800);
+    }
+    history.replaceState({}, '', location.pathname);
+  } catch(e) { /* invalid param */ }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
+  checkImportTemplate();
   loadSaved();
   renderAll();
   bindEvents();
