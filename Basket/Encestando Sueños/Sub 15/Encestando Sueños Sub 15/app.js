@@ -242,6 +242,13 @@ function loadSaved() {
       history:       [],
     };
     S.players.forEach(ensurePlayer);
+    // Merge any DEFAULT_PLAYERS not present in saved state (handles roster additions)
+    DEFAULT_PLAYERS.forEach(p => {
+      if (!S.players.includes(p)) {
+        S.players.push(p);
+        ensurePlayer(p);
+      }
+    });
     return true;
   } catch(e) { console.warn('Error cargando:', e); return false; }
 }
