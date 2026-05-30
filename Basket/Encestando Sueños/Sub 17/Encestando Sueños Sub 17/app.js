@@ -743,13 +743,13 @@ function newGame() {
   if (totalPts() > 0 || S.players.some(p => S.minutesPlayed[p] > 0)) {
     const rivalScoreRaw = prompt('¿Cuántos puntos anotó el rival? (Enter para saltar)', '');
     const rivalScore    = rivalScoreRaw !== null && rivalScoreRaw.trim() !== '' ? parseInt(rivalScoreRaw) : null;
-    const rivalName     = S.gameName.replace(/titans\s*vs\s*/i, '').trim() || '???';
+    const rivalName     = S.gameName.replace(/mba\s*vs\s*/i, '').trim() || '???';
     saveToHistory(rivalName, rivalScore);
   }
 
   const opponent = prompt('Nombre del nuevo rival:', '___') || '___';
   S = newState();
-  S.gameName = `Titans vs ${opponent.trim()}`;
+  S.gameName = `MBA vs ${opponent.trim()}`;
   localStorage.removeItem(STORAGE_KEY);
   renderAll();
   toast('🔄 Nuevo partido iniciado');
@@ -862,7 +862,7 @@ function openHistorial() {
         return `<details class="game-item">
           <summary>
             <span class="game-result">${result}</span>
-            <span class="game-title">Titans vs ${g.rivalName}</span>
+            <span class="game-title">MBA vs ${g.rivalName}</span>
             <span class="game-score">${scoreStr}</span>
             <span class="game-date">${g.date}</span>
           </summary>
@@ -915,7 +915,7 @@ function openHistorial() {
   const html = `<!DOCTYPE html>
 <html lang="es"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Historial — Titans</title>
+<title>Historial — MBA Sub 17</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:'Helvetica Neue',Arial,sans-serif;background:#f5f5f5;color:#1a1a2e;font-size:14px}
@@ -959,7 +959,7 @@ function openHistorial() {
 </style>
 </head><body><div class="page">
   <button class="print-btn" onclick="window.print()">🖨️ Imprimir / Guardar PDF</button>
-  <h1>📚 Historial — Titans</h1>
+  <h1>📚 Historial — MBA Sub 17</h1>
   <p class="subtitle">Copa Talento Sub-18 · ${history.length} partido${history.length!==1?'s':''} registrado${history.length!==1?'s':''}</p>
 
   <div class="record">
@@ -1006,11 +1006,11 @@ function reportSummaryText(rivalPts) {
 
   if (rivalPts !== null) {
     const diff = teamPts - rivalPts;
-    if (diff > 0)      txt += `Los Titans se impusieron por ${teamPts} a ${rivalPts}, logrando una victoria por ${diff} punto${diff!==1?'s':''}. `;
-    else if (diff < 0) txt += `Los Titans cayeron por ${rivalPts} a ${teamPts}, una derrota por ${Math.abs(diff)} punto${Math.abs(diff)!==1?'s':''}. `;
+    if (diff > 0)      txt += `MBA se impuso por ${teamPts} a ${rivalPts}, logrando una victoria por ${diff} punto${diff!==1?'s':''}. `;
+    else if (diff < 0) txt += `MBA cayó por ${rivalPts} a ${teamPts}, una derrota por ${Math.abs(diff)} punto${Math.abs(diff)!==1?'s':''}. `;
     else               txt += `El partido terminó en un empate ${teamPts}-${rivalPts}. `;
   } else {
-    txt += `Los Titans anotaron ${teamPts} puntos en total. `;
+    txt += `MBA anotó ${teamPts} puntos en total. `;
   }
 
   if (mvp) {
