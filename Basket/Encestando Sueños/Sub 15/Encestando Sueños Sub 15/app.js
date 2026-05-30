@@ -68,18 +68,21 @@ const TABLE_COLS = [
       const a = totStat('2PT_ATT')  + totStat('3PT_ATT');
       return fmtPct(a > 0 ? m/a : null);
     },
+  },
   { h:'3PT%',
     fn: p => fmtPct(threePct(p)),
     total: () => {
       const m = totStat('3PT_MADE'), a = totStat('3PT_ATT');
       return fmtPct(a > 0 ? m/a : null);
     },
+  },
   { h:'FT%',
     fn: p => fmtPct(ftPct(p)),
     total: () => {
       const m = totStat('FT_MADE'), a = totStat('FT_ATT');
       return fmtPct(a > 0 ? m/a : null);
     },
+  },
   { h:'R.Of',  fn: p => S.stats[p].REB_OFF,                   total: () => totStat('REB_OFF') },
   { h:'R.Def', fn: p => S.stats[p].REB_DEF,                   total: () => totStat('REB_DEF') },
   { h:'REB',   fn: p => S.stats[p].REB_OFF + S.stats[p].REB_DEF,
