@@ -65,6 +65,7 @@
         <button id="btnNewGame"   class="ctrl-btn new-game-btn">🔄 Nuevo</button>
         <button id="btnReport"    class="ctrl-btn accent-btn">📝 Resumen</button>
         <button id="btnHistorial" class="ctrl-btn hist-btn">📚 Historial</button>
+        <button id="btnPlantillas" class="ctrl-btn tpl-btn">👥 Plantillas</button>
         <button id="btnTable"     class="ctrl-btn">📋</button>
         <button id="btnAdd"       class="ctrl-btn">＋</button>
         <button id="btnRemove"    class="ctrl-btn danger-btn">－</button>
@@ -96,6 +97,21 @@
 
 <!-- SheetJS — cargado async; SW lo cachea para uso offline -->
 <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js" defer></script>
-<script src="app.js?v=1" defer></script>
+<script src="app.js?v=2" defer></script>
+
+<!-- Plantillas Modal -->
+<div id="tplModal" class="tpl-overlay" hidden>
+  <div class="tpl-box">
+    <div class="tpl-hdr">
+      <span>👥 Plantillas de Equipo</span>
+      <button class="tpl-close-btn" onclick="document.getElementById('tplModal').hidden=true">✕</button>
+    </div>
+    <div id="tplList" class="tpl-list"></div>
+    <div class="tpl-footer">
+      <button class="tpl-action-btn" onclick="saveCurrentAsTemplate()">💾 Guardar nómina actual como plantilla</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>

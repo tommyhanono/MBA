@@ -1339,6 +1339,7 @@ function bindEvents() {
   document.getElementById('btnReport')    ?.addEventListener('click', generateReport);
   document.getElementById('btnNewGame')   ?.addEventListener('click', newGame);
   document.getElementById('btnHistorial') ?.addEventListener('click', openHistorial);
+  document.getElementById('btnPlantillas')?.addEventListener('click', openTemplates);
   document.getElementById('btnAdd')     ?.addEventListener('click', addPlayer);
   document.getElementById('btnRemove')  ?.addEventListener('click', removePlayer);
 
@@ -1369,6 +1370,98 @@ function registerSW() {
 /* ═══════════════════════════════════════════════════════════════════════════
    INIT
 ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PLANTILLAS DE EQUIPO — cross-device via jsonblob
+═══════════════════════════════════════════════════════════════════════════ */
+const TEMPLATES_URL = 'https://jsonblob.com/api/jsonBlob/019e763e-40ff-7c54-9bcc-95890e810b94';
+let _tplCache = null;
+
+async function _fetchTemplates() {
+  try {
+    const r = await fetch(TEMPLATES_URL, { cache: 'no-store' });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    _tplCache = d.templates || [];
+    return _tplCache;
+  } catch(e) { return _tplCache || []; }
+}
+
+async function _pushTemplates(templates) {
+  _tplCache = templates;
+  try {
+    await fetch(TEMPLATES_URL, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ templates })
+    });
+  } catch(e) { toast('Sin conexión — cambio no sincronizado'); }
+}
+
+function _renderTplList(templates) {
+  const list = document.getElementById('tplList');
+  if (!templates.length) {
+    list.innerHTML = '<p class="tpl-empty">No hay plantillas guardadas.<br>Guardá la nómina actual para crear la primera.</p>';
+    return;
+  }
+  list.innerHTML = templates.map((t, i) => `
+    <div class="tpl-row">
+      <span class="tpl-name">${t.name}<small>(${t.players.length} jug.)</small></span>
+      <button class="tpl-load-btn" onclick="loadTemplate(${i})">Cargar</button>
+      <button class="tpl-del-btn"  onclick="deleteTemplate(${i})">✕</button>
+    </div>`).join('');
+}
+
+async function openTemplates() {
+  const modal = document.getElementById('tplModal');
+  const list  = document.getElementById('tplList');
+  list.innerHTML = '<p class="tpl-empty">Cargando...</p>';
+  modal.hidden = false;
+  const templates = await _fetchTemplates();
+  _renderTplList(templates);
+}
+
+async function loadTemplate(idx) {
+  const templates = _tplCache;
+  if (!templates?.[idx]) return;
+  const t = templates[idx];
+  if (!confirm(`¿Cargar plantilla "${t.name}"?\n\nSe reemplazarán los jugadores y se resetearán las estadísticas del partido actual.`)) return;
+  const players = [...t.players];
+  const oldHistory = S.history || [];
+  S.players       = players;
+  S.stats         = makeStats(players);
+  S.minutesPlayed = makeMinutes(players);
+  S.onCourt       = [];
+  S.fouledOut     = {};
+  S.selected      = players[0];
+  S.history       = oldHistory;
+  renderAll();
+  scheduleSave();
+  toast(`✓ Plantilla "${t.name}" cargada`);
+  document.getElementById('tplModal').hidden = true;
+}
+
+async function deleteTemplate(idx) {
+  const templates = _tplCache;
+  if (!templates?.[idx]) return;
+  if (!confirm(`¿Eliminar la plantilla "${templates[idx].name}"?`)) return;
+  templates.splice(idx, 1);
+  await _pushTemplates(templates);
+  _renderTplList(templates);
+  toast('Plantilla eliminada');
+}
+
+async function saveCurrentAsTemplate() {
+  const name = prompt('Nombre de la plantilla:');
+  if (!name?.trim()) return;
+  toast('Guardando...');
+  const templates = await _fetchTemplates();
+  templates.push({ name: name.trim(), players: [...S.players] });
+  await _pushTemplates(templates);
+  _renderTplList(templates);
+  toast(`✓ Plantilla "${name.trim()}" guardada`);
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   loadSaved();
   renderAll();
