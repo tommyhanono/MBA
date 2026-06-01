@@ -937,6 +937,7 @@ async function openHistorial() {
             <span class="game-title">MBA vs ${g.rivalName}</span>
             <span class="game-score">${scoreStr}</span>
             <span class="game-date">${g.date}</span>
+            <button class="del-game-btn" onclick="event.preventDefault();event.stopPropagation();deleteGame('${g._fbKey||''}',${i})" title="Eliminar partido">🗑️</button>
           </summary>
           <div class="game-detail">
             <table class="h-table">
@@ -1031,7 +1032,9 @@ async function openHistorial() {
   .save-bar-label{color:rgba(255,255,255,0.9);font-size:0.85rem;flex:1;min-width:160px;margin:0}
   .save-current-btn{background:#2ecc71;color:#fff;border:none;border-radius:6px;padding:10px 18px;font-size:0.9rem;font-weight:700;cursor:pointer;flex-shrink:0;white-space:nowrap}
   .save-current-btn:hover{background:#27ae60}
-  @media print{.print-btn,.save-bar{display:none}}
+  .del-game-btn{margin-left:auto;background:none;border:none;font-size:1.1rem;cursor:pointer;opacity:0.45;padding:2px 6px;border-radius:4px;flex-shrink:0;color:#c0392b;line-height:1}
+  .del-game-btn:hover{opacity:1;background:#ffeaea}
+  @media print{.print-btn,.save-bar,.del-game-btn{display:none}}
 </style>
 </head>
 <script>
@@ -1042,6 +1045,13 @@ async function doSaveCurrent() {
   }
   const saved = await window.opener.saveCurrentToHistory();
   if (saved) { window.opener.openHistorial(); window.close(); }
+}
+async function deleteGame(fbKey, idx) {
+  if (!confirm('¿Eliminar este partido del historial? Esta acción no se puede deshacer.')) return;
+  if (!window.opener || window.opener.closed) { alert('Cerrá y volvé a abrir el historial desde la app.'); return; }
+  await window.opener.fbDelete(fbKey);
+  window.opener.openHistorial();
+  window.close();
 }
 </script>
 <body><div class="page">
