@@ -775,53 +775,9 @@ async function newGame() {
 const FB_BASE = 'https://titans-tracker-default-rtdb.firebaseio.com';
 const FB_NODE = 'mba_sub17';
 
-// ═══ FIREBASE AUTH — acceso por aprobación ════════════════════════════════
-const FB_AUTH_CFG = { apiKey:'REPLACE_WITH_FIREBASE_API_KEY', authDomain:'titans-tracker.firebaseapp.com', projectId:'titans-tracker' };
-let FB_TOKEN = null;
-let _fbAuthRes;
-const AUTH_READY = new Promise(r => { _fbAuthRes = r; });
-const _origFetch = window.fetch;
-window.fetch = (url, opts) => {
-  if (typeof url === 'string' && url.includes('firebaseio.com') && FB_TOKEN)
-    url += (url.includes('?') ? '&' : '?') + 'auth=' + FB_TOKEN;
-  return _origFetch(url, opts);
-};
-function _authShow(id) {
-  ['login','loading','pending'].forEach(s =>
-    document.getElementById('auth-' + s).style.display = s === id ? '' : 'none');
+function fbLog(event, extra) {
+  try { fetch(`${FB_BASE}/activity_log.json`, { method:'POST', body:JSON.stringify({ event, tracker:FB_NODE, ts:Date.now(), ...(extra||{}) }) }); } catch(e){}
 }
-function _authGrant() {
-  document.getElementById('auth-overlay').style.display = 'none';
-  if (_fbAuthRes) { _fbAuthRes(); _fbAuthRes = null; }
-}
-async function _authCheck(user) {
-  if (!user) { _authShow('login'); return; }
-  _authShow('loading');
-  try {
-    FB_TOKEN = await user.getIdToken(true);
-    if (user.email === 'tommyhanono@gmail.com') { _authGrant(); return; }
-    const r = await fetch(`${FB_BASE}/approved_users/${user.uid}.json`);
-    const d = await r.json();
-    if (d && d.approved === true) { _authGrant(); return; }
-    await fetch(`${FB_BASE}/pending_users/${user.uid}.json`, {
-      method: 'PUT',
-      body: JSON.stringify({ email:user.email, name:user.displayName||'', requestedAt:Date.now(), tracker:FB_NODE })
-    });
-    document.getElementById('auth-email').textContent = user.email;
-    _authShow('pending');
-  } catch(e) { console.error('Auth error:',e); _authShow('login'); }
-}
-function _initAuth() {
-  if (!firebase.apps.length) firebase.initializeApp(FB_AUTH_CFG);
-  document.getElementById('btn-google-signin').addEventListener('click', () =>
-    firebase.auth().signInWithPopup(new firebase.auth.GoogleAuthProvider()));
-  firebase.auth().onAuthStateChanged(_authCheck);
-  firebase.auth().onIdTokenChanged(async u => { if (u) FB_TOKEN = await u.getIdToken(); });
-  setInterval(async () => { const u=firebase.auth().currentUser; if (u) FB_TOKEN=await u.getIdToken(true); }, 45*60*1000);
-}
-function firebaseSignOut() { FB_TOKEN = null; firebase.auth().signOut(); }
-async function checkMyApproval() { const u=firebase.auth().currentUser; if(u) await _authCheck(u); }
-// ════════════════════════════════════════════════════════════════════════════
 
 async function fbGet() {
   try {
@@ -851,6 +807,7 @@ async function fbPush(game) {
       local.push(game);
       localStorage.setItem(HISTORY_KEY, JSON.stringify(local));
     } catch(_) {}
+    fbLog('history_save');
     return fbKey;
   } catch(e) {
     try {
@@ -1684,8 +1641,6 @@ async function checkImportTemplate() {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-  _initAuth();
-  await AUTH_READY;
   checkImportTemplate();
   const hasSaved = loadSaved();
   if (!hasSaved) {
@@ -1705,4 +1660,5 @@ document.addEventListener('DOMContentLoaded', async () => {
   bindEvents();
   startInterval();
   registerSW();
+  fbLog('app_open');
 });
