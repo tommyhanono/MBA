@@ -779,6 +779,23 @@ function fbLog(event, extra) {
   try { fetch(`${FB_BASE}/activity_log.json`, { method:'POST', body:JSON.stringify({ event, tracker:FB_NODE, ts:Date.now(), ...(extra||{}) }) }); } catch(e){}
 }
 
+async function appEnabled() {
+  try {
+    const r = await fetch(`${FB_BASE}/app_status/${FB_NODE}.json`, {cache:'no-store'});
+    const v = await r.json();
+    return v !== false;
+  } catch(e) { return false; }
+}
+function showBlocked() {
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;inset:0;background:#0f1117;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;color:#e2e8f0;font-family:system-ui;text-align:center;padding:24px';
+  d.innerHTML = '<div style="font-size:56px">\u{1F512}</div>' +
+    '<div style="font-size:22px;font-weight:700">App desactivada</div>' +
+    '<div style="color:#94a3b8;max-width:320px;line-height:1.5">Esta app est\u00e1 temporalmente desactivada por el administrador. Se necesita conexi\u00f3n a internet y autorizaci\u00f3n para usarla.</div>' +
+    '<button onclick="location.reload()" style="margin-top:12px;padding:10px 28px;border-radius:8px;border:none;background:#3b82f6;color:#fff;font-size:14px;font-weight:600;cursor:pointer">Reintentar</button>';
+  document.body.appendChild(d);
+}
+
 async function fbGet() {
   try {
     const res = await fetch(`${FB_BASE}/${FB_NODE}/history.json?orderBy="$key"`);
@@ -1641,6 +1658,7 @@ async function checkImportTemplate() {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+  if (!(await appEnabled())) { fbLog('app_blocked'); showBlocked(); return; }
   checkImportTemplate();
   const hasSaved = loadSaved();
   if (!hasSaved) {
