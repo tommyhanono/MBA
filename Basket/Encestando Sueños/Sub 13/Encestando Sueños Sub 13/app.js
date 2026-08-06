@@ -596,6 +596,7 @@ function logStat(key) {
   if (!S.selected) { toast('Selecciona un jugador primero'); return; }
   if (S.fouledOut[S.selected]) { toast(`${shortName(S.selected)} fue eliminado por 5 faltas`); return; }
   haptic();
+  sessTrack(key, S.selected);
 
   // Snapshot completo para undo (incluye fouledOut y onCourt)
   S.history.push({
@@ -662,6 +663,7 @@ function undoLast() {
   if (!S.history.length) { toast('Nada que deshacer'); return; }
   haptic();
   const { player, key, snap, fouledOutSnap, onCourtSnap } = S.history.pop();
+  SESS.undos++;
   S.stats    = JSON.parse(snap);
   S.fouledOut = fouledOutSnap ? JSON.parse(fouledOutSnap) : S.fouledOut;
   S.onCourt   = onCourtSnap   ? JSON.parse(onCourtSnap)   : S.onCourt;
@@ -796,6 +798,55 @@ function showBlocked() {
   document.body.appendChild(d);
 }
 
+/* ═══ TELEMETRÍA DE SESIÓN ═══════════════════════════════════════════════ */
+const SESSION_ID    = FB_NODE + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+const SESSION_START = Date.now();
+const SESS = { stats:0, undos:0, byStat:{}, byPlayer:{}, byQuarter:{}, saves:0, first:0, last:0 };
+
+function sessTrack(key, player) {
+  SESS.stats++;
+  SESS.byStat[key]      = (SESS.byStat[key]      || 0) + 1;
+  if (player) SESS.byPlayer[player] = (SESS.byPlayer[player] || 0) + 1;
+  SESS.byQuarter[S.quarter] = (SESS.byQuarter[S.quarter] || 0) + 1;
+  if (!SESS.first) SESS.first = Date.now();
+  SESS.last = Date.now();
+}
+
+function sessFlush(closed) {
+  const now = Date.now();
+  const body = {
+    tracker:     FB_NODE,
+    start:       SESSION_START,
+    end:         now,
+    minutes:     Math.round((now - SESSION_START) / 60000),
+    activeMin:   SESS.first ? Math.round((SESS.last - SESS.first) / 60000) : 0,
+    gameName:    (typeof S !== 'undefined' && S.gameName)  || '',
+    quarter:     (typeof S !== 'undefined' && S.quarter)   || '',
+    score:       (typeof totalPts === 'function') ? totalPts() : 0,
+    players:     (typeof S !== 'undefined' && S.players)   || [],
+    stats:       SESS.stats,
+    undos:       SESS.undos,
+    byStat:      SESS.byStat,
+    byPlayer:    SESS.byPlayer,
+    byQuarter:   SESS.byQuarter,
+    saves:       SESS.saves,
+    closed:      !!closed,
+  };
+  try {
+    fetch(`${FB_BASE}/sessions/${SESSION_ID}.json`,
+          { method:'PUT', body: JSON.stringify(body), keepalive: !!closed });
+  } catch(e) {}
+}
+
+function sessStart() {
+  sessFlush(false);
+  setInterval(() => sessFlush(false), 60 * 1000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') sessFlush(true);
+  });
+  window.addEventListener('pagehide', () => sessFlush(true));
+}
+
 async function fbGet() {
   try {
     const res = await fetch(`${FB_BASE}/${FB_NODE}/history.json?orderBy="$key"`);
@@ -825,6 +876,7 @@ async function fbPush(game) {
       localStorage.setItem(HISTORY_KEY, JSON.stringify(local));
     } catch(_) {}
     fbLog('history_save', { gameName: game.gameName||'', rivalName: game.rivalName||'', titansScore: game.titansScore??null, rivalScore: game.rivalScore??null, players: game.players||[] });
+    SESS.saves++; sessFlush(false);
     return fbKey;
   } catch(e) {
     try {
@@ -1679,4 +1731,5 @@ document.addEventListener('DOMContentLoaded', async () => {
   startInterval();
   registerSW();
   fbLog('app_open', { players: S.players||[] });
+  sessStart();
 });
