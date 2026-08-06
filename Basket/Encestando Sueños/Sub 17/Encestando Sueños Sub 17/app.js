@@ -777,8 +777,55 @@ async function newGame() {
 const FB_BASE = 'https://titans-tracker-default-rtdb.firebaseio.com';
 const FB_NODE = 'mba_sub17';
 
+/* ═══ IDENTIDAD DEL DISPOSITIVO ═══════════════════════════════════════════ */
+const DEV_ID = (() => {
+  try {
+    let id = localStorage.getItem('bk_device_id');
+    if (!id) {
+      id = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+      localStorage.setItem('bk_device_id', id);
+    }
+    return id;
+  } catch(e) { return 'd_anon'; }
+})();
+
+const DEV_INFO = (() => {
+  const ua = navigator.userAgent;
+  let device = 'Desconocido';
+  if (/iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) device = 'iPad';
+  else if (/iPhone/.test(ua))    device = 'iPhone';
+  else if (/Android/.test(ua))   device = /Mobile/.test(ua) ? 'Android' : 'Tablet Android';
+  else if (/Macintosh/.test(ua)) device = 'Mac';
+  else if (/Windows/.test(ua))   device = 'Windows';
+  let browser = 'Otro';
+  if      (/CriOS|Chrome|Chromium/.test(ua)) browser = 'Chrome';
+  else if (/FxiOS|Firefox/.test(ua))         browser = 'Firefox';
+  else if (/Edg/.test(ua))                   browser = 'Edge';
+  else if (/Safari/.test(ua))                browser = 'Safari';
+  let pwa = false;
+  try { pwa = window.matchMedia('(display-mode: standalone)').matches || !!navigator.standalone; } catch(e) {}
+  return { device, browser, pwa, screen: `${screen.width}x${screen.height}`, lang: navigator.language || '' };
+})();
+
+let GEO = null;
+async function loadGeo() {
+  try {
+    const cached = sessionStorage.getItem('bk_geo');
+    if (cached) { GEO = JSON.parse(cached); return; }
+    const ctl = new AbortController();
+    setTimeout(() => ctl.abort(), 4000);
+    const r = await fetch('https://ipwho.is/', { signal: ctl.signal });
+    const d = await r.json();
+    if (d && d.success !== false) {
+      GEO = { ip: d.ip || '', city: d.city || '', region: d.region || '',
+              country: d.country || '', isp: (d.connection && d.connection.isp) || '' };
+      sessionStorage.setItem('bk_geo', JSON.stringify(GEO));
+    }
+  } catch(e) {}
+}
+
 function fbLog(event, extra) {
-  try { fetch(`${FB_BASE}/activity_log.json`, { method:'POST', body:JSON.stringify({ event, tracker:FB_NODE, ts:Date.now(), ...(extra||{}) }) }); } catch(e){}
+  try { fetch(`${FB_BASE}/activity_log.json`, { method:'POST', body:JSON.stringify({ event, tracker:FB_NODE, ts:Date.now(), device:DEV_ID, devInfo:(typeof DEV_INFO!=='undefined'?DEV_INFO:null), geo:GEO||null, ...(extra||{}) }) }); } catch(e){}
 }
 
 async function appEnabled() {
@@ -816,6 +863,9 @@ function sessFlush(closed) {
   const now = Date.now();
   const body = {
     tracker:     FB_NODE,
+    device:      DEV_ID,
+    devInfo:     DEV_INFO,
+    geo:         GEO || null,
     start:       SESSION_START,
     end:         now,
     minutes:     Math.round((now - SESSION_START) / 60000),
@@ -839,6 +889,7 @@ function sessFlush(closed) {
 }
 
 function sessStart() {
+  loadGeo().then(() => sessFlush(false));
   sessFlush(false);
   setInterval(() => sessFlush(false), 60 * 1000);
   document.addEventListener('visibilitychange', () => {
