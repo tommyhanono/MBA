@@ -1250,11 +1250,15 @@ async function doSaveCurrent() {
     return;
   }
   const raw = (document.getElementById('rivalPts').value || '').trim();
-  if (raw !== '' && !/^\d{1,3}$/.test(raw)) {
-    saveMsg('Los puntos del rival tienen que ser un número entero. Déjalo vacío si no lo sabes.', 'err');
+  // Sin regex a propósito: este script viaja dentro de un template literal y
+  // ahí las barras invertidas se pierden (un /^\d+$/ se emitía como /^d+$/ y
+  // rechazaba todos los números). Number.isInteger no necesita escapes.
+  const n = Number(raw);
+  if (raw !== '' && (!Number.isInteger(n) || n < 0 || n > 999)) {
+    saveMsg('Los puntos del rival tienen que ser un número entero entre 0 y 999. Déjalo vacío si no lo sabes.', 'err');
     return;
   }
-  const rivalScore = raw === '' ? null : parseInt(raw, 10);
+  const rivalScore = raw === '' ? null : n;
   btn.disabled = true;
   saveMsg('Guardando…', 'ok');
   let r;
