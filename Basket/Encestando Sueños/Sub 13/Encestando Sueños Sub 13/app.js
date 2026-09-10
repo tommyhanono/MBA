@@ -1001,7 +1001,10 @@ function hasCurrentGameData() {
    Devuelve {ok, error} para que el Historial pueda mostrar qué pasó. */
 async function saveCurrentToHistoryWithScore(rivalScore) {
   if (!hasCurrentGameData())
-    return { ok:false, error:'la app no tiene estadísticas cargadas en este momento' };
+    return { ok:false, sinPartido:true,
+             error:'la app no tiene ningún partido cargado en este dispositivo. Las '
+                 + 'estadísticas viven en el equipo donde se marcaron: si el partido lo '
+                 + 'marcaste en otro celular, tablet o navegador, súbelo desde ese equipo.' };
   const rivalName = S.gameName.replace(/.*vs\s*/i, '').trim() || '???';
   let fbKey = null;
   try {
@@ -1033,6 +1036,10 @@ async function openHistorial() {
   const history = await fbGet();
   const T = TRACKER_ID;
   const cur = { name: S.gameName, pts: totalPts(), hasData: hasCurrentGameData() };
+  const SIN_PARTIDO_MSG = 'La app no tiene ningún partido cargado en este dispositivo. '
+    + 'El Historial sube el partido que esté abierto en la app, y las estadísticas viven '
+    + 'en el equipo donde se marcaron. Si el partido lo marcaste en otro celular, tablet o '
+    + 'navegador, tienes que subirlo desde ese mismo equipo.';
 
   /* ── Season totals per player ── */
   const allPlayers = [...new Set(history.flatMap(g => g.players))];
@@ -1211,6 +1218,7 @@ ${idStyles()}
   .save-bar-label{color:var(--ink);font-size:0.85rem;flex:1 1 160px;margin:0}
   .save-bar-text{flex:1 1 200px;min-width:0}
   .save-bar-game{font-size:0.76rem;color:var(--muted);margin-top:3px}
+  .save-bar-game.sin-partido{color:#7d1a1a;font-weight:700}
   .rival-field{display:flex;flex-direction:column;gap:3px;font-size:0.66rem;font-weight:700;
                letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);flex-shrink:0}
   .rival-field input{width:84px;padding:8px 10px;border:1px solid var(--rule);border-radius:2px;
@@ -1287,17 +1295,17 @@ async function deleteGame(fbKey, idx) {
   <div class="save-bar">
     <div class="save-bar-text">
       <p class="save-bar-label">¿Terminaste el partido? Guárdalo para que aparezca en el historial.</p>
-      <p class="save-bar-game">${cur.hasData
+      <p class="save-bar-game${cur.hasData ? '' : ' sin-partido'}">${cur.hasData
         ? `${cur.name} · ${cur.pts} punto${cur.pts!==1?'s':''} cargados en la app`
-        : 'La app no tiene estadísticas cargadas ahora mismo'}</p>
+        : '⚠️ La app no tiene ningún partido cargado en este dispositivo'}</p>
     </div>
     <label class="rival-field" for="rivalPts">Puntos del rival
       <input id="rivalPts" type="number" min="0" max="999" step="1" inputmode="numeric"
-             placeholder="—" onkeydown="onRivalKey(event)" ${cur.hasData?'':'disabled'}>
+             placeholder="—" onkeydown="onRivalKey(event)">
     </label>
-    <button class="save-current-btn" id="btnSaveCurrent" onclick="doSaveCurrent()" ${cur.hasData?'':'disabled'}>💾 Guardar Partido Actual</button>
+    <button class="save-current-btn" id="btnSaveCurrent" onclick="doSaveCurrent()">💾 Guardar Partido Actual</button>
   </div>
-  <p id="saveMsg" class="save-msg" hidden></p>
+  <p id="saveMsg" class="save-msg${cur.hasData ? '' : ' err'}"${cur.hasData ? ' hidden' : ''}>${cur.hasData ? '' : SIN_PARTIDO_MSG}</p>
 
   ${idHeader('Historial de temporada', `${history.length} partido${history.length!==1?'s':''} registrado${history.length!==1?'s':''}`)}
 
