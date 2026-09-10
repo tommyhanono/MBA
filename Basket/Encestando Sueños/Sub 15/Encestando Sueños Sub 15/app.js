@@ -777,6 +777,25 @@ async function newGame() {
 const FB_BASE = 'https://titans-tracker-default-rtdb.firebaseio.com';
 const FB_NODE = 'mba_sub15';
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   IDENTIDAD DEL TRACKER
+   Único lugar donde se define equipo, liga, categoría, logos y colores.
+   Todo el texto visible del reporte y del historial sale de aquí.
+   OJO: esto NO toca nombres de campos de datos (titansScore y compañía siguen
+   igual en Firebase; renombrarlos dejaría los partidos guardados en blanco).
+═══════════════════════════════════════════════════════════════════════════ */
+const TRACKER_ID = {
+  team:       'MBA',
+  league:     'Encestando Sueños',
+  category:   'Sub 15',
+  teamPlural: false,
+  teamColor:  '#F59E0B',
+  logo:       null,
+  leagueLogo: null,
+  theme: { base:'#C2620A', accent:'#F59E0B', ink:'#451A03', baseText:'#9A4E08' },
+};
+
+
 /* ═══ IDENTIDAD DEL DISPOSITIVO ═══════════════════════════════════════════ */
 const DEV_ID = (() => {
   try {
@@ -982,6 +1001,7 @@ async function saveCurrentToHistory() {
 
 async function openHistorial() {
   const history = await fbGet();
+  const T = TRACKER_ID;
 
   /* ── Season totals per player ── */
   const allPlayers = [...new Set(history.flatMap(g => g.players))];
@@ -1022,7 +1042,7 @@ async function openHistorial() {
   /* ── SVG line chart ── */
   function sparkline(playerName) {
     const games = history.filter(g => g.players.includes(playerName));
-    if (games.length < 2) return '<em style="color:#888;font-size:0.75rem">Pocos partidos</em>';
+    if (games.length < 2) return '<em style="color:#6f675c;font-size:0.75rem">Pocos partidos</em>';
     const vals = games.map(g => {
       const s = g.stats[playerName] || {};
       return (s['2PT_MADE']||0)*2 + (s['3PT_MADE']||0)*3 + (s['FT_MADE']||0);
@@ -1037,32 +1057,34 @@ async function openHistorial() {
     const dots = vals.map((v, i) => {
       const x = pad + (i / (vals.length-1)) * (W2 - pad*2);
       const y = H2 - pad - (v / max) * (H2 - pad*2);
-      return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" fill="#f1c40f"/>
+      return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" fill="${T.theme.accent}"/>
               <title>Partido ${i+1}: ${v} pts</title>`;
     }).join('');
-    return `<svg width="${W2}" height="${H2}" style="overflow:visible">
-      <polyline points="${points}" fill="none" stroke="#c0392b" stroke-width="2" stroke-linejoin="round"/>
+    return `<svg width="${W2}" height="${H2}" style="overflow:visible" role="img" aria-label="Progresión de puntos de ${playerName}">
+      <polyline points="${points}" fill="none" stroke="${T.theme.base}" stroke-width="2" stroke-linejoin="round"/>
       ${dots}
     </svg>`;
   }
 
   /* ── Games list HTML ── */
   const gamesHtml = history.length === 0
-    ? '<p style="color:#888;padding:12px">No hay partidos registrados aún.</p>'
+    ? '<p class="empty-state">No hay partidos registrados aún.</p>'
     : [...history].reverse().map((g, ri) => {
         const i = history.length - 1 - ri;
-        const result = g.rivalScore !== null && g.rivalScore !== undefined
-          ? (g.titansScore > g.rivalScore ? '✅' : g.titansScore < g.rivalScore ? '❌' : '🟡')
-          : '';
+        const won  = g.rivalScore !== null && g.rivalScore !== undefined && g.titansScore > g.rivalScore;
+        const lost = g.rivalScore !== null && g.rivalScore !== undefined && g.titansScore < g.rivalScore;
+        const tied = g.rivalScore !== null && g.rivalScore !== undefined && g.titansScore === g.rivalScore;
+        const result = won ? '✅' : lost ? '❌' : tied ? '🟡' : '';
+        const resClass = won ? 'res-win' : lost ? 'res-loss' : tied ? 'res-draw' : '';
         const scoreStr = g.rivalScore !== null && g.rivalScore !== undefined
           ? `${g.titansScore} — ${g.rivalScore}` : `${g.titansScore} — ?`;
-        return `<details class="game-item">
+        return `<details class="game-item ${resClass}">
           <summary>
             <span class="game-result">${result}</span>
-            <span class="game-title">MBA vs ${g.rivalName}</span>
+            <span class="game-title">${T.team} vs ${g.rivalName}</span>
             <span class="game-score">${scoreStr}</span>
             <span class="game-date">${g.date}</span>
-            <button class="del-game-btn" onclick="event.preventDefault();event.stopPropagation();deleteGame('${g._fbKey||''}',${i})" title="Eliminar partido">🗑️</button>
+            <button class="del-game-btn" onclick="event.preventDefault();event.stopPropagation();deleteGame('${g._fbKey||''}',${i})" title="Eliminar partido" aria-label="Eliminar partido">🗑️</button>
           </summary>
           <div class="game-detail">
             <table class="h-table">
@@ -1113,59 +1135,65 @@ async function openHistorial() {
   const html = `<!DOCTYPE html>
 <html lang="es"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Historial — MBA Sub 15</title>
+<title>Historial — ${T.team} ${T.category}</title>
 <style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:'Helvetica Neue',Arial,sans-serif;background:#f5f5f5;color:#1a1a2e;font-size:14px}
-  .page{max-width:900px;margin:0 auto;background:#fff;padding:32px}
-  h1{font-size:1.6rem;font-weight:900;margin-bottom:4px}
-  .subtitle{color:#888;font-size:0.85rem;margin-bottom:24px}
-  .record{display:flex;gap:16px;margin-bottom:28px}
-  .rec-box{text-align:center;padding:12px 20px;border-radius:10px;min-width:70px}
-  .rec-box .num{font-size:2rem;font-weight:900;line-height:1}
-  .rec-box .lbl{font-size:0.7rem;font-weight:700;letter-spacing:0.1em;margin-top:2px}
-  .win{background:#1a5e35;color:#2ecc71}.loss{background:#5c0a0a;color:#e74c3c}.draw{background:#1a3a6e;color:#7ec8e3}
-  section{margin-bottom:32px}
-  section h2{font-size:0.72rem;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;
-             color:#fff;background:#1a1a2e;padding:6px 12px;border-radius:4px;margin-bottom:12px}
-  .game-item{border:1px solid #eee;border-radius:8px;margin-bottom:8px;overflow:hidden}
-  .game-item summary{display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;
-                     list-style:none;background:#fafafa;font-weight:600}
+${idStyles()}
+  .record{display:flex;gap:12px;margin-bottom:30px;flex-wrap:wrap}
+  .rec-box{flex:1 1 90px;text-align:center;padding:14px 12px;border-radius:2px;border:1px solid var(--rule);background:var(--paper-2)}
+  .rec-box .num{font-family:var(--serif);font-size:2.4rem;font-weight:700;line-height:1}
+  .rec-box .lbl{font-size:0.62rem;font-weight:700;letter-spacing:0.16em;margin-top:4px;color:var(--muted)}
+  .rec-box.win .num{color:#1a6b3c}.rec-box.loss .num{color:#a02020}.rec-box.draw .num{color:var(--ink)}
+  .rec-box.win{border-top:3px solid #1a6b3c}.rec-box.loss{border-top:3px solid #a02020}.rec-box.draw{border-top:3px solid var(--base)}
+  .game-item{border:1px solid var(--rule);border-radius:2px;margin-bottom:8px;overflow:hidden;background:#fff;
+             break-inside:avoid;page-break-inside:avoid}
+  .game-item summary{display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;
+                     list-style:none;background:var(--paper-2);font-weight:600;flex-wrap:wrap}
   .game-item summary::-webkit-details-marker{display:none}
-  .game-item[open] summary{background:#f0f0f0}
-  .game-result{font-size:1rem;flex-shrink:0}
-  .game-title{flex:1;font-size:0.95rem}
-  .game-score{font-weight:900;font-size:1rem;color:#1a1a2e}
-  .game-date{font-size:0.75rem;color:#888;flex-shrink:0}
-  .game-detail{padding:12px;overflow-x:auto}
+  .game-item[open] summary{background:#fff;border-bottom:1px solid var(--rule)}
+  .game-item.res-win summary{border-left:4px solid #1a6b3c}
+  .game-item.res-loss summary{border-left:4px solid #a02020}
+  .game-item.res-draw summary{border-left:4px solid var(--base)}
+  .game-result{font-size:0.95rem;flex-shrink:0}
+  .game-title{flex:1 1 140px;font-size:0.95rem;font-family:var(--serif);font-weight:600}
+  .game-score{font-family:var(--serif);font-weight:700;font-size:1.05rem;color:var(--ink);flex-shrink:0}
+  .game-date{font-size:0.72rem;color:var(--muted);flex-shrink:0}
+  .game-detail{padding:12px;overflow-x:auto;-webkit-overflow-scrolling:touch}
   .h-table{border-collapse:collapse;min-width:100%;font-size:0.78rem;white-space:nowrap}
-  .h-table th{background:#1a1a2e;color:#f1c40f;padding:5px 8px;text-align:center;font-weight:700}
+  .h-table th{background:var(--ink);color:#fff;padding:6px 8px;text-align:center;font-weight:700;
+              font-size:0.66rem;letter-spacing:0.06em;text-transform:uppercase}
   .h-table th:first-child{text-align:left}
-  .h-table td{padding:4px 8px;text-align:center;border-bottom:1px solid #eee}
+  .h-table td{padding:5px 8px;text-align:center;border-bottom:1px solid var(--rule)}
   .h-table td:first-child{text-align:left}
-  .h-table tr:nth-child(even) td{background:#f9f9f9}
+  .h-table tr:nth-child(even) td{background:var(--paper-2)}
   .season-table{border-collapse:collapse;min-width:100%;font-size:0.78rem;white-space:nowrap}
-  .season-table th{background:#1a1a2e;color:#f1c40f;padding:6px 8px;text-align:center;font-weight:700;position:sticky;top:0}
+  .season-table th{background:var(--ink);color:#fff;padding:7px 8px;text-align:center;font-weight:700;
+                   font-size:0.66rem;letter-spacing:0.06em;text-transform:uppercase}
   .season-table th:first-child{text-align:left}
-  .season-table td{padding:5px 8px;text-align:center;border-bottom:1px solid #eee}
+  .season-table td{padding:6px 8px;text-align:center;border-bottom:1px solid var(--rule)}
   .season-table td:first-child{text-align:left;font-weight:600}
-  .season-table tr:nth-child(even) td{background:#f9f9f9}
-  .tbl-wrap{overflow-x:auto}
-  .print-btn{display:block;margin:0 auto 28px;padding:10px 28px;background:#1a1a2e;color:#fff;
-             border:none;border-radius:8px;font-size:0.95rem;font-weight:700;cursor:pointer}
-  .save-bar{background:#1a5e35;border-radius:8px;padding:14px 16px;margin-bottom:20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-  .save-bar-label{color:rgba(255,255,255,0.9);font-size:0.85rem;flex:1;min-width:160px;margin:0}
-  .save-current-btn{background:#2ecc71;color:#fff;border:none;border-radius:6px;padding:10px 18px;font-size:0.9rem;font-weight:700;cursor:pointer;flex-shrink:0;white-space:nowrap}
-  .save-current-btn:hover{background:#27ae60}
-  .del-game-btn{margin-left:auto;background:none;border:none;font-size:1.1rem;cursor:pointer;opacity:0.45;padding:2px 6px;border-radius:4px;flex-shrink:0;color:#c0392b;line-height:1}
-  .del-game-btn:hover{opacity:1;background:#ffeaea}
-  @media print{.print-btn,.save-bar,.del-game-btn{display:none}}
+  .season-table tr:nth-child(even) td{background:var(--paper-2)}
+  .tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--rule);border-radius:2px}
+  .empty-state{color:var(--muted);padding:20px;text-align:center;font-style:italic;
+               border:1px dashed var(--rule);border-radius:2px}
+  .save-bar{background:var(--paper-2);border:1px solid var(--rule);border-left:4px solid var(--base);
+            border-radius:2px;padding:14px 16px;margin-bottom:22px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .save-bar-label{color:var(--ink);font-size:0.85rem;flex:1 1 160px;margin:0}
+  .save-current-btn{background:#1a6b3c;color:#fff;border:none;border-radius:2px;padding:11px 18px;
+                    font-size:0.9rem;font-weight:700;cursor:pointer;flex-shrink:0;white-space:nowrap;font-family:inherit}
+  .save-current-btn:hover{background:#14532b}
+  .del-game-btn{margin-left:auto;background:none;border:none;font-size:1rem;cursor:pointer;opacity:0.45;
+                padding:3px 6px;border-radius:2px;flex-shrink:0;line-height:1}
+  .del-game-btn:hover{opacity:1;background:#fbe9e9}
+  @media print{.print-btn,.save-bar,.del-game-btn{display:none}
+    .game-item{border-color:#bbb}
+    details{display:block}
+    details>summary{list-style:none}}
 </style>
 </head>
 <script>
 async function doSaveCurrent() {
   if (!window.opener || window.opener.closed) {
-    alert('Cerrá el historial y volvé a abrirlo desde la app.');
+    alert('Cierra el historial y vuelve a abrirlo desde la app.');
     return;
   }
   const saved = await window.opener.saveCurrentToHistory();
@@ -1173,7 +1201,7 @@ async function doSaveCurrent() {
 }
 async function deleteGame(fbKey, idx) {
   if (!confirm('¿Eliminar este partido del historial? Esta acción no se puede deshacer.')) return;
-  if (!window.opener || window.opener.closed) { alert('Cerrá y volvé a abrir el historial desde la app.'); return; }
+  if (!window.opener || window.opener.closed) { alert('Cierra y vuelve a abrir el historial desde la app.'); return; }
   await window.opener.fbDelete(fbKey);
   window.opener.openHistorial();
   window.close();
@@ -1182,11 +1210,11 @@ async function deleteGame(fbKey, idx) {
 <body><div class="page">
   <button class="print-btn" onclick="window.print()">🖨️ Imprimir / Guardar PDF</button>
   <div class="save-bar">
-    <p class="save-bar-label">¿Terminaste el partido? Guardalo para que aparezca en el historial.</p>
+    <p class="save-bar-label">¿Terminaste el partido? Guárdalo para que aparezca en el historial.</p>
     <button class="save-current-btn" onclick="doSaveCurrent()">💾 Guardar Partido Actual</button>
   </div>
-  <h1>📚 Historial — MBA Sub 15</h1>
-  <p class="subtitle">Copa Talento Sub-18 · ${history.length} partido${history.length!==1?'s':''} registrado${history.length!==1?'s':''}</p>
+
+  ${idHeader('Historial de temporada', `${history.length} partido${history.length!==1?'s':''} registrado${history.length!==1?'s':''}`)}
 
   <div class="record">
     <div class="rec-box win"><div class="num">${W}</div><div class="lbl">VICTORIAS</div></div>
@@ -1207,10 +1235,12 @@ async function deleteGame(fbKey, idx) {
           <th>Jugador</th><th>PJ</th><th>PTS/J</th><th>FG%</th><th>3PT%</th><th>FT%</th>
           <th>REB/J</th><th>AST/J</th><th>TOV/J</th><th>FALT/J</th><th>Progresión PTS</th>
         </tr></thead>
-        <tbody>${seasonHtml || '<tr><td colspan="11" style="text-align:center;color:#888;padding:12px">Sin datos aún</td></tr>'}</tbody>
+        <tbody>${seasonHtml || '<tr><td colspan="11" style="text-align:center;color:#6f675c;padding:14px">Sin datos aún</td></tr>'}</tbody>
       </table>
     </div>
   </section>
+
+  ${idFooter()}
 </div></body></html>`;
 
   const w = window.open('', '_blank');
@@ -1219,9 +1249,151 @@ async function deleteGame(fbKey, idx) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   IDENTIDAD VISUAL COMPARTIDA (reporte + historial)
+   Todo sale de TRACKER_ID: equipo, liga, categoría, logos y colores.
+═══════════════════════════════════════════════════════════════════════════ */
+
+/* Insignia de liga: logo embebido si existe, si no un distintivo tipográfico. */
+function idLeagueBadge() {
+  const T = TRACKER_ID;
+  if (T.leagueLogo) return `<img class="lg-mark" src="${T.leagueLogo}" alt="${T.league}">`;
+  const initials = T.league.split(/\s+/).map(w => w[0]).join('').toUpperCase().slice(0,2);
+  return `<svg class="lg-mark" viewBox="0 0 120 120" role="img" aria-label="${T.league}">
+    <circle cx="60" cy="60" r="56" fill="none" stroke="${T.theme.base}" stroke-width="3"/>
+    <circle cx="60" cy="60" r="48" fill="${T.theme.ink}"/>
+    <text x="60" y="60" text-anchor="middle" dominant-baseline="central"
+          font-family="Georgia,'Times New Roman',serif" font-size="40" font-weight="700"
+          fill="#ffffff" letter-spacing="1">${initials}</text>
+    <path d="M14 60 A46 46 0 0 1 106 60" fill="none" stroke="${T.theme.accent}" stroke-width="2"/>
+  </svg>`;
+}
+
+/* Logo del equipo: imagen embebida o wordmark tipográfico. */
+function idTeamMark() {
+  const T = TRACKER_ID;
+  if (T.logo) return `<img class="tm-mark" src="${T.logo}" alt="${T.team}">`;
+  return `<div class="tm-wordmark" style="color:${T.theme.ink};border-color:${T.theme.base}">
+    <span class="tm-wordmark-main">${T.team}</span>
+    <span class="tm-wordmark-sub">${T.league}</span>
+  </div>`;
+}
+
+/* Cabecera editorial común. */
+function idHeader(kicker, meta) {
+  const T = TRACKER_ID;
+  return `<header class="id-header">
+    <div class="id-marks">${idTeamMark()}${idLeagueBadge()}</div>
+    <div class="id-lines">
+      <p class="id-kicker">${kicker}</p>
+      <h1 class="id-team">${T.team}</h1>
+      <p class="id-league">${T.team} · ${T.league} · ${T.category}</p>
+      ${meta ? `<p class="id-meta">${meta}</p>` : ''}
+    </div>
+  </header>`;
+}
+
+function idFooter() {
+  const T = TRACKER_ID;
+  return `<footer class="id-footer">${T.team} · ${T.league} · ${T.category} — generado por el tracker de estadísticas</footer>`;
+}
+
+/* CSS común: papel, serif editorial y los tres colores de la liga. */
+function idStyles() {
+  const T = TRACKER_ID;
+  return `
+  :root{
+    --base:${T.theme.base}; --accent:${T.theme.accent}; --ink:${T.theme.ink};
+    --base-text:${T.theme.baseText || T.theme.base};
+    --team:${T.teamColor || T.theme.accent};
+    --paper:#faf8f4; --paper-2:#f4f1ea; --rule:#e0dbd0; --text:#241f1a; --muted:#6f675c;
+    --serif:Georgia,'Iowan Old Style','Times New Roman',serif;
+    --sans:-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{max-width:100%;overflow-x:hidden}
+  body{font-family:var(--sans);background:var(--paper-2);color:var(--text);font-size:14px;
+       -webkit-text-size-adjust:100%}
+  .page{max-width:860px;margin:0 auto;background:var(--paper);padding:36px 32px 28px;
+        border-top:6px solid var(--base);box-shadow:0 1px 3px rgba(0,0,0,0.06)}
+  /* Cabecera */
+  .id-header{display:flex;align-items:center;gap:20px;flex-wrap:wrap;
+             border-bottom:1px solid var(--rule);padding-bottom:18px;margin-bottom:8px}
+  .id-marks{display:flex;align-items:center;gap:12px;flex-shrink:0}
+  .tm-mark{width:66px;height:66px;object-fit:contain;display:block}
+  .lg-mark{width:52px;height:52px;object-fit:contain;display:block}
+  .tm-wordmark{display:flex;flex-direction:column;justify-content:center;padding:8px 14px;
+               border-left:4px solid;min-height:60px}
+  .tm-wordmark-main{font-family:var(--serif);font-size:1.9rem;font-weight:700;line-height:1;letter-spacing:0.02em}
+  .tm-wordmark-sub{font-size:0.6rem;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;
+                   margin-top:4px;color:var(--muted)}
+  .id-lines{flex:1 1 200px;min-width:0}
+  .id-kicker{font-size:0.64rem;font-weight:700;letter-spacing:0.2em;text-transform:uppercase;color:var(--base-text)}
+  .id-team{font-family:var(--serif);font-size:2rem;font-weight:700;line-height:1.1;margin:2px 0 4px;color:var(--ink);
+           display:inline-block;background:linear-gradient(transparent 64%,var(--team) 64%);padding:0 2px}
+  .id-league{font-size:0.78rem;font-weight:600;letter-spacing:0.04em;color:var(--muted)}
+  .id-meta{font-size:0.74rem;color:var(--muted);margin-top:3px}
+  .id-footer{margin-top:28px;padding-top:12px;border-top:1px solid var(--rule);
+             font-size:0.68rem;color:var(--muted);text-align:center;letter-spacing:0.04em}
+  /* Secciones */
+  section{margin-bottom:30px;break-inside:avoid;page-break-inside:avoid}
+  section h2,section h3{font-family:var(--sans);font-size:0.68rem;font-weight:800;letter-spacing:0.16em;
+    text-transform:uppercase;color:#fff;background:var(--ink);padding:7px 12px;border-radius:2px;
+    margin-bottom:14px;break-after:avoid;page-break-after:avoid}
+  section p{line-height:1.7;color:var(--text)}
+  h1,h2,h3,tr,.kpi,.top-player,.tip{break-inside:avoid;page-break-inside:avoid}
+  /* Botón imprimir */
+  .print-btn{display:block;margin:0 auto 26px;padding:11px 30px;background:var(--ink);color:#fff;
+             border:none;border-radius:2px;font-size:0.95rem;font-weight:700;cursor:pointer;
+             letter-spacing:0.05em;font-family:inherit}
+  .print-btn:hover{background:var(--base-text)}
+  .print-btn:focus-visible,.save-current-btn:focus-visible,.del-game-btn:focus-visible,
+  summary:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+  @media (max-width:520px){
+    .page{padding:22px 16px 20px}
+    .id-team{font-size:1.6rem}
+    .tm-mark{width:52px;height:52px}
+    .lg-mark{width:42px;height:42px}
+  }
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+  @media print{
+    body{background:#fff}
+    .page{padding:16px;box-shadow:none;max-width:100%;border-top-width:4px}
+    .print-btn{display:none}
+    section h2,section h3{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    thead{display:table-header-group}
+    tfoot{display:table-footer-group}
+    tr,img,svg{break-inside:avoid;page-break-inside:avoid}
+    /* En papel no hay scroll: los contenedores deben soltar el recorte y las
+       tablas anchas encogerse para que no se corten columnas. */
+    .table-scroll,.tbl-wrap,.game-detail{overflow:visible!important;border:none}
+    .stats-table,.season-table,.h-table{min-width:0!important;width:100%!important;
+      table-layout:fixed;font-size:0.6rem}
+    .stats-table th,.stats-table td,.season-table th,.season-table td,
+    .h-table th,.h-table td{padding:3px 2px;white-space:normal;word-break:break-word;
+      overflow-wrap:anywhere}
+    .stats-table th:first-child,.stats-table td:first-child{width:13%}
+    .stats-table th:last-child,.stats-table td:last-child{width:11%}
+    .season-table th:first-child,.season-table td:first-child,
+    .h-table th:first-child,.h-table td:first-child{width:16%}
+    .season-table th:last-child,.season-table td:last-child{width:16%}
+    details{display:block}details>summary{list-style:none}
+    details:not([open])>.game-detail{display:none}
+  }`;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    REPORTE DE PARTIDO
 ═══════════════════════════════════════════════════════════════════════════ */
 function pct1(v) { return v === null ? '--' : (Math.round(v * 1000)/10) + '%'; }
+
+/* Concordancia del nombre del equipo en el resumen narrativo. */
+function teamSubject() {
+  const T = TRACKER_ID;
+  return T.teamPlural ? `Los ${T.team}` : T.team;
+}
+function teamVerb(plural, singular) {
+  return TRACKER_ID.teamPlural ? plural : singular;
+}
 
 function reportSummaryText(rivalPts) {
   const teamPts = totalPts();
@@ -1232,11 +1404,11 @@ function reportSummaryText(rivalPts) {
 
   if (rivalPts !== null) {
     const diff = teamPts - rivalPts;
-    if (diff > 0)      txt += `MBA se impuso por ${teamPts} a ${rivalPts}, logrando una victoria por ${diff} punto${diff!==1?'s':''}. `;
-    else if (diff < 0) txt += `MBA cayó por ${rivalPts} a ${teamPts}, una derrota por ${Math.abs(diff)} punto${Math.abs(diff)!==1?'s':''}. `;
+    if (diff > 0)      txt += `${teamSubject()} ${teamVerb('se impusieron','se impuso')} por ${teamPts} a ${rivalPts}, logrando una victoria por ${diff} punto${diff!==1?'s':''}. `;
+    else if (diff < 0) txt += `${teamSubject()} ${teamVerb('cayeron','cayó')} por ${rivalPts} a ${teamPts}, una derrota por ${Math.abs(diff)} punto${Math.abs(diff)!==1?'s':''}. `;
     else               txt += `El partido terminó en un empate ${teamPts}-${rivalPts}. `;
   } else {
-    txt += `MBA anotó ${teamPts} puntos en total. `;
+    txt += `${teamSubject()} ${teamVerb('anotaron','anotó')} ${teamPts} puntos en total. `;
   }
 
   if (mvp) {
@@ -1288,7 +1460,165 @@ function reportRecommendations() {
   return recs;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   ANÁLISIS PROFUNDO
+   Métricas derivadas de los mismos datos ya registrados. No cambia nada de lo
+   que se guarda: solo lee stats/minutesPlayed/fouledOut del partido en curso.
+═══════════════════════════════════════════════════════════════════════════ */
+
+/* Tiros fallados de un jugador (campo + libres). */
+function missedShots(p) {
+  const s = S.stats[p];
+  return ((s['2PT_ATT']||0)-(s['2PT_MADE']||0))
+       + ((s['3PT_ATT']||0)-(s['3PT_MADE']||0))
+       + ((s['FT_ATT']||0)-(s['FT_MADE']||0));
+}
+
+/* Valoración: PTS + REB + AST + STL + BLK − TOV − tiros fallados. */
+function valoracion(p) {
+  const s = S.stats[p];
+  return pts(p) + (s.REB_OFF||0)+(s.REB_DEF||0) + (s.AST||0) + (s.STL||0) + (s.BLK||0)
+       - (s.TOV||0) - missedShots(p);
+}
+
+/* Intentos de campo de un jugador. */
+function fgAtt(p) {
+  const s = S.stats[p];
+  return (s['2PT_ATT']||0) + (s['3PT_ATT']||0);
+}
+
+/* Paquete de análisis del partido en curso. */
+function reportAnalysis() {
+  const teamPts = totalPts();
+
+  /* Eficiencia vs volumen: ≥6 intentos de campo con menos de 30% FG */
+  const inefficient = S.players.filter(p => {
+    const fg = fgPct(p);
+    return fgAtt(p) >= 6 && fg !== null && fg < 0.30;
+  });
+
+  /* Puntos por minuto: mejor ratio con al menos 5 minutos jugados */
+  const eligible = S.players.filter(p => (S.minutesPlayed[p]||0) >= 300 && pts(p) > 0);
+  let bestPPM = null;
+  eligible.forEach(p => {
+    const ppm = pts(p) / ((S.minutesPlayed[p]||0)/60);
+    if (!bestPPM || ppm > bestPPM.ppm) bestPPM = { player:p, ppm };
+  });
+
+  /* Ratio AST/TOV del equipo */
+  const ast = totStat('AST'), tov = totStat('TOV');
+  const astTov = tov > 0 ? ast/tov : (ast > 0 ? Infinity : null);
+
+  /* Dependencia ofensiva del máximo anotador */
+  const scorers = [...S.players].filter(p => pts(p) > 0).sort((a,b) => pts(b)-pts(a));
+  const topScorer = scorers[0] || null;
+  const share = (topScorer && teamPts > 0) ? pts(topScorer)/teamPts : null;
+
+  /* Rebote ofensivo % */
+  const ro = totStat('REB_OFF'), rd = totStat('REB_DEF');
+  const orebPct = (ro+rd) > 0 ? ro/(ro+rd) : null;
+
+  /* Rotación: jugadores sin minutos */
+  const bench = S.players.filter(p => (S.minutesPlayed[p]||0) === 0);
+
+  return { teamPts, inefficient, bestPPM, ast, tov, astTov, topScorer, share, ro, rd, orebPct, bench };
+}
+
+/* Tips priorizados: ALTA → MEDIA → FORTALEZA. Cada uno con dato y acción. */
+function reportTips() {
+  const A = reportAnalysis();
+  const tips = [];
+  const add = (level, title, dato, accion) => tips.push({ level, title, dato, accion });
+
+  const ftA = totStat('FT_ATT'), ftM = totStat('FT_MADE');
+  const thA = totStat('3PT_ATT'), thM = totStat('3PT_MADE');
+  const fgM = totStat('2PT_MADE')+totStat('3PT_MADE');
+  const fgA = totStat('2PT_ATT')+totStat('3PT_ATT');
+
+  /* ── ALTA ── */
+  if (ftA >= 5 && ftM/ftA < 0.50)
+    add('alta', 'Tiros libres',
+        `${ftM}/${ftA} (${pct1(ftM/ftA)}).`,
+        'Cerrar cada práctica con 10 TL por jugador bajo fatiga.');
+
+  if (A.tov > 15)
+    add('alta', 'Pérdidas de balón',
+        `${A.tov} pérdidas en el partido.`,
+        'Dos series diarias de salida de presión 4v4 con conteo de pases.');
+
+  const elim = S.players.filter(p => S.fouledOut[p]);
+  if (elim.length)
+    add('alta', 'Faltas que cuestan jugadores',
+        `${elim.map(shortName).join(', ')} fuera por 5 faltas.`,
+        'Trabajar defensa de pies sin manos y ayudas que no obliguen a chocar.');
+
+  if (A.astTov !== null && A.astTov !== Infinity && A.astTov < 1.0)
+    add('alta', 'Circulación de balón',
+        `AST/TOV ${A.astTov.toFixed(2)} (${A.ast} asistencias, ${A.tov} pérdidas).`,
+        'Regla en práctica: mínimo tres pases antes de tirar en ataque estático.');
+
+  /* ── MEDIA ── */
+  if (A.share !== null && A.share > 0.40)
+    add('media', 'Dependencia de un anotador',
+        `${shortName(A.topScorer)} aportó ${pts(A.topScorer)} de ${A.teamPts} (${pct1(A.share)}).`,
+        'Diseñar dos jugadas para la segunda opción ofensiva.');
+
+  if (A.inefficient.length)
+    add('media', 'Volumen sin eficiencia',
+        `${A.inefficient.map(p => `${shortName(p)} ${pct1(fgPct(p))} en ${fgAtt(p)} tiros`).join('; ')}.`,
+        'Restringir su selección de tiro a zona pintada y tiro liberado.');
+
+  if (thA === 0)
+    add('media', 'Sin amenaza de triple',
+        'Cero intentos de 3 puntos en todo el partido.',
+        'Identificar dos tiradores y darles 50 triples de esquina por sesión.');
+  else if (thM/thA < 0.25)
+    add('media', 'Triple poco fiable',
+        `${thM}/${thA} (${pct1(thM/thA)}) desde la línea de 3.`,
+        'Reducir el triple a tiro de ritmo: solo tras pase extra.');
+
+  const nearFO = S.players.filter(p => (S.stats[p].FOUL||0) >= 4 && !S.fouledOut[p]);
+  if (nearFO.length)
+    add('media', 'Al borde de la quinta falta',
+        `${nearFO.map(p => `${shortName(p)} (${S.stats[p].FOUL} faltas)`).join(', ')}.`,
+        'Plan de rotación para sentarlos al llegar a la cuarta falta.');
+
+  if (A.orebPct !== null && A.orebPct < 0.20 && (A.ro+A.rd) >= 8)
+    add('media', 'Rebote ofensivo',
+        `${A.ro} de ${A.ro+A.rd} rebotes fueron ofensivos (${pct1(A.orebPct)}).`,
+        'Asignar dos jugadores fijos al rebote de ataque en cada tiro.');
+
+  if (A.bench.length)
+    add('media', 'Rotación corta',
+        `Sin minutos: ${A.bench.map(shortName).join(', ')}.`,
+        'Reservarles un turno fijo por cuarto para sostener el ritmo.');
+
+  /* ── FORTALEZAS ── */
+  if (A.astTov !== null && (A.astTov === Infinity || A.astTov > 1.5))
+    add('fortaleza', 'Cuidado del balón',
+        `${A.tov} pérdidas, AST/TOV ${A.astTov === Infinity ? '—' : A.astTov.toFixed(2)}.`,
+        'Mantener la misma lectura de pase en partidos cerrados.');
+
+  if (ftA >= 5 && ftM/ftA >= 0.75)
+    add('fortaleza', 'Tiro libre sólido',
+        `${ftM}/${ftA} (${pct1(ftM/ftA)}).`,
+        'Buscar contacto: el equipo convierte lo que gana en la línea.');
+
+  if (fgA >= 10 && fgM/fgA >= 0.45)
+    add('fortaleza', 'Selección de tiro',
+        `${pct1(fgM/fgA)} en tiros de campo (${fgM}/${fgA}).`,
+        'Seguir insistiendo en el tiro cerca del aro.');
+
+  if (A.bestPPM)
+    add('fortaleza', 'Mejor rendimiento por minuto',
+        `${shortName(A.bestPPM.player)}: ${A.bestPPM.ppm.toFixed(2)} puntos por minuto.`,
+        'Evaluar darle más minutos en tramos decisivos.');
+
+  return tips;
+}
+
 function generateReport() {
+  const T = TRACKER_ID;
   const rivalRaw = prompt('¿Cuántos puntos anotó el rival? (deja vacío si no lo sabes)', '');
   const rivalPts = rivalRaw !== null && rivalRaw.trim() !== '' ? parseInt(rivalRaw.trim(), 10) : null;
   const teamPts  = totalPts();
@@ -1300,6 +1630,22 @@ function generateReport() {
   const sorted  = [...S.players].sort((a,b) => pts(b)-pts(a));
   const topThree = sorted.filter(p => pts(p) > 0).slice(0, 3);
 
+  /* ── Líder por columna (se resalta en la tabla) ── */
+  const played = S.players.filter(p => (S.minutesPlayed[p]||0) > 0 || pts(p) > 0);
+  const leaderOf = (fn, minVal = 1) => {
+    let best = null, bv = -Infinity;
+    played.forEach(p => { const v = fn(p); if (v !== null && v > bv) { bv = v; best = p; } });
+    return (bv >= minVal) ? best : null;
+  };
+  const LEAD = {
+    pts: leaderOf(p => pts(p)),
+    reb: leaderOf(p => (S.stats[p].REB_OFF||0)+(S.stats[p].REB_DEF||0)),
+    ast: leaderOf(p => S.stats[p].AST||0),
+    val: leaderOf(p => valoracion(p), -Infinity),
+    min: leaderOf(p => S.minutesPlayed[p]||0),
+  };
+  const lead = (p, k) => LEAD[k] === p ? ' class="lead-cell"' : '';
+
   const playerRowsHtml = S.players.map(p => {
     const s   = S.stats[p];
     const min = S.minutesPlayed[p] || 0;
@@ -1310,27 +1656,29 @@ function generateReport() {
     else if ((s.FOUL||0) >= 4) nota = '⚠️ 4 faltas';
     else if (p === topThree[0] && pts(p) > 0) nota = '⭐ MVP';
 
-    const rowStyle = S.fouledOut[p] ? ' style="color:#c0392b"' : (noPlay ? ' style="color:#888"' : '');
+    const rowStyle = S.fouledOut[p] ? ' style="color:#a02020"' : (noPlay ? ' style="color:#6f675c"' : '');
     return `<tr${rowStyle}>
       <td>${p}${S.fouledOut[p] ? '*' : ''}</td>
-      <td>${fmtMin(min)}</td>
-      <td><strong>${pts(p)}</strong></td>
+      <td${lead(p,'min')}>${fmtMin(min)}</td>
+      <td${lead(p,'pts')}><strong>${pts(p)}</strong></td>
       <td>${s['2PT_MADE']||0}/${s['2PT_ATT']||0}</td>
       <td>${s['3PT_MADE']||0}/${s['3PT_ATT']||0}</td>
       <td>${s['FT_MADE']||0}/${s['FT_ATT']||0}</td>
       <td>${pct1(fgPct(p))}</td>
       <td>${pct1(ftPct(p))}</td>
-      <td style="${(s.TOV||0)>=5?'color:#c0392b;font-weight:700':''}">${s.TOV||0}</td>
-      <td>${(s.REB_OFF||0)+(s.REB_DEF||0)}</td>
-      <td>${s.AST||0}</td>
-      <td style="${(s.FOUL||0)>=4?'color:#c0392b;font-weight:700':''}">${s.FOUL||0}</td>
-      <td style="font-size:0.8em;color:#555">${nota}</td>
+      <td style="${(s.TOV||0)>=5?'color:#a02020;font-weight:700':''}">${s.TOV||0}</td>
+      <td${lead(p,'reb')}>${(s.REB_OFF||0)+(s.REB_DEF||0)}</td>
+      <td${lead(p,'ast')}>${s.AST||0}</td>
+      <td style="${(s.FOUL||0)>=4?'color:#a02020;font-weight:700':''}">${s.FOUL||0}</td>
+      <td${lead(p,'val')}>${noPlay ? '--' : valoracion(p)}</td>
+      <td style="font-size:0.8em;color:#6f675c">${nota}</td>
     </tr>`;
   }).join('');
 
   const topPlayersHtml = topThree.map((p, i) => {
     const s      = S.stats[p];
     const label  = i === 0 ? '⭐ MVP del partido' : `${i+1}° Anotador`;
+    const medal  = ['🥇','🥈','🥉'][i] || '';
     const fg     = fgPct(p), ftp = ftPct(p), th3 = threePct(p);
     const bullets = [
       `${pts(p)} puntos anotados`,
@@ -1341,29 +1689,80 @@ function generateReport() {
       `${s.TOV||0} pérdidas`,
       `${s.FOUL||0} falta${(s.FOUL||0)!==1?'s':''}`,
     ].filter(Boolean);
-    return `<div class="top-player">
-      <div class="top-player-name">${i+1}. ${p} — <em>${label}</em></div>
+    return `<div class="top-player rank-${i+1}">
+      <div class="top-player-head">
+        <span class="medal" aria-hidden="true">${medal}</span>
+        <div>
+          <div class="top-player-name">${i+1}. ${p} — <em>${label}</em></div>
+          <div class="top-player-val">Valoración ${valoracion(p)}</div>
+        </div>
+      </div>
       <ul>${bullets.map(b=>`<li>${b}</li>`).join('')}</ul>
     </div>`;
   }).join('') || '<p>Sin datos de anotación registrados.</p>';
 
   const recsHtml = reportRecommendations().map(r => `<li>${r}</li>`).join('');
 
+  /* ── Tips priorizados ── */
+  const LEVELS = { alta:'Prioridad alta', media:'Prioridad media', fortaleza:'Fortaleza' };
+  const tips = reportTips();
+  const tipsHtml = tips.length
+    ? tips.map(t => `<div class="tip tip-${t.level}">
+        <div class="tip-head"><span class="tip-level">${LEVELS[t.level]}</span><span class="tip-title">${t.title}</span></div>
+        <p class="tip-dato">${t.dato}</p>
+        <p class="tip-accion"><strong>Acción:</strong> ${t.accion}</p>
+      </div>`).join('')
+    : `<div class="tip tip-fortaleza"><div class="tip-head"><span class="tip-level">Fortaleza</span><span class="tip-title">Partido parejo</span></div>
+       <p class="tip-dato">No aparecieron focos rojos ni amarillos en los datos del partido.</p>
+       <p class="tip-accion"><strong>Acción:</strong> Mantener el nivel de ejecución y seguir trabajando la unidad de equipo.</p></div>`;
+
+  const A = reportAnalysis();
+  const analysisRows = [
+    ['Valoración más alta', (() => {
+      const best = [...S.players].filter(p => (S.minutesPlayed[p]||0) > 0)
+        .sort((a,b) => valoracion(b)-valoracion(a))[0];
+      return best ? `${best} (${valoracion(best)})` : '--';
+    })()],
+    ['Puntos por minuto (líder)', A.bestPPM ? `${A.bestPPM.player} — ${A.bestPPM.ppm.toFixed(2)} PT/min` : '--'],
+    ['Ratio AST/TOV del equipo', A.astTov === null ? '--' : (A.astTov === Infinity ? '∞' : A.astTov.toFixed(2)) +
+      (A.astTov !== null && A.astTov !== Infinity ? (A.astTov > 1.5 ? ' ✅ fortaleza' : (A.astTov < 1.0 ? ' ⚠️ alarma' : '')) : ' ✅ fortaleza')],
+    ['Dependencia del máximo anotador', A.share === null ? '--' :
+      `${shortName(A.topScorer)} ${pct1(A.share)} de los puntos${A.share > 0.40 ? ' ⚠️' : ''}`],
+    ['Rebote ofensivo %', A.orebPct === null ? '--' : `${pct1(A.orebPct)} (${A.ro} of / ${A.ro+A.rd} tot)`],
+    ['Eficiencia vs volumen', A.inefficient.length
+      ? A.inefficient.map(p => `${shortName(p)} ${pct1(fgPct(p))} en ${fgAtt(p)} tiros ⚠️`).join(' · ')
+      : 'Sin casos de volumen ineficiente'],
+    ['Rotación sin minutos', A.bench.length ? A.bench.map(shortName).join(', ') : 'Todos vieron cancha'],
+  ].map(([k,v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+
   const ftA = totStat('FT_ATT'), ftM = totStat('FT_MADE');
   const thA = totStat('3PT_ATT'), thM = totStat('3PT_MADE');
   const teamFgM = totStat('2PT_MADE')+totStat('3PT_MADE');
   const teamFgA = totStat('2PT_ATT')+totStat('3PT_ATT');
   const hasFO = S.players.some(p => S.fouledOut[p]);
+  const totalReb = totStat('REB_OFF')+totStat('REB_DEF');
+
+  const outcome = rivalPts === null ? null
+    : (teamPts > rivalPts ? 'win' : teamPts < rivalPts ? 'loss' : 'draw');
+  const outcomeLabel = outcome === 'win' ? 'VICTORIA' : outcome === 'loss' ? 'DERROTA' : outcome === 'draw' ? 'EMPATE' : '';
 
   const scoreBlock = rivalPts !== null
     ? `<div class="score-block">
-        <div class="score-team"><div class="score-name">TITANS</div><div class="score-pts">${teamPts}</div></div>
+        <div class="score-team team-side"><div class="score-name">${T.team.toUpperCase()}</div><div class="score-pts">${teamPts}</div></div>
         <div class="score-vs">VS</div>
         <div class="score-team"><div class="score-name">RIVAL</div><div class="score-pts">${rivalPts}</div></div>
-       </div>`
+       </div>
+       <div class="outcome outcome-${outcome}">${outcomeLabel}${outcome!=='draw'?` · ${teamPts-rivalPts>0?'+':''}${teamPts-rivalPts}`:''}</div>`
     : `<div class="score-block">
-        <div class="score-team"><div class="score-name">TITANS</div><div class="score-pts">${teamPts}</div></div>
+        <div class="score-team team-side"><div class="score-name">${T.team.toUpperCase()}</div><div class="score-pts">${teamPts}</div></div>
        </div>`;
+
+  const kpiHtml = `<div class="kpi-row">
+    <div class="kpi"><div class="kpi-val">${teamPts}</div><div class="kpi-lbl">PTS</div></div>
+    <div class="kpi"><div class="kpi-val">${teamFgA>0 ? pct1(teamFgM/teamFgA) : '--'}</div><div class="kpi-lbl">FG%</div></div>
+    <div class="kpi"><div class="kpi-val">${totalReb}</div><div class="kpi-lbl">REB</div></div>
+    <div class="kpi"><div class="kpi-val">${totStat('AST')}</div><div class="kpi-lbl">AST</div></div>
+  </div>`;
 
   const html = `<!DOCTYPE html>
 <html lang="es">
@@ -1372,73 +1771,105 @@ function generateReport() {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Reporte — ${gn}</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #f5f5f5; color: #1a1a2e; font-size: 14px; }
-  .page { max-width: 820px; margin: 0 auto; background: #fff; padding: 40px; }
-  /* Header */
-  .report-header { text-align: center; border-bottom: 3px solid #1a1a2e; padding-bottom: 20px; margin-bottom: 24px; }
-  .report-header .emoji { font-size: 2.5rem; }
-  .report-header h1 { font-size: 1.1rem; letter-spacing: 0.15em; color: #555; margin: 4px 0; }
-  .report-header h2 { font-size: 1.8rem; font-weight: 900; color: #1a1a2e; margin: 6px 0; }
-  .report-header .meta { font-size: 0.8rem; color: #888; margin-top: 6px; }
-  /* Score */
-  .score-block { display: flex; justify-content: center; align-items: center; gap: 30px; margin: 16px 0; }
-  .score-team { text-align: center; }
-  .score-name { font-size: 0.9rem; font-weight: 700; letter-spacing: 0.1em; color: #555; }
-  .score-pts { font-size: 3.5rem; font-weight: 900; color: #1a1a2e; line-height: 1; }
-  .score-vs { font-size: 1.2rem; font-weight: 700; color: #888; }
-  /* Sections */
-  section { margin-bottom: 28px; }
-  section h3 { font-size: 0.75rem; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase;
-               color: #fff; background: #1a1a2e; padding: 6px 12px; border-radius: 4px; margin-bottom: 12px; }
-  section p { line-height: 1.65; color: #333; }
-  /* Team stats table */
-  .team-table { width: 100%; border-collapse: collapse; }
-  .team-table td { padding: 8px 12px; border-bottom: 1px solid #eee; }
-  .team-table td:first-child { color: #555; width: 55%; }
-  .team-table td:last-child { font-weight: 700; font-size: 1.05rem; }
-  .team-table tr:last-child td { border-bottom: none; }
-  /* Player stats table */
-  .stats-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
-  .stats-table th { background: #1a1a2e; color: #f1c40f; font-weight: 700; padding: 6px 8px;
-                    text-align: center; white-space: nowrap; }
-  .stats-table th:first-child { text-align: left; }
-  .stats-table td { padding: 5px 8px; text-align: center; border-bottom: 1px solid #eee; }
-  .stats-table td:first-child { text-align: left; font-weight: 600; }
-  .stats-table tr:nth-child(even) td { background: #f9f9f9; }
-  .stats-table .total-row td { background: #f0f0f0; font-weight: 700; border-top: 2px solid #1a1a2e; }
-  .foul-note { font-size: 0.75rem; color: #c0392b; margin-top: 6px; }
-  /* Top players */
-  .top-player { margin-bottom: 14px; }
-  .top-player-name { font-weight: 700; font-size: 1rem; margin-bottom: 4px; }
-  .top-player ul { padding-left: 20px; }
-  .top-player li { line-height: 1.7; color: #444; }
-  /* Recs */
-  .rec-list { padding-left: 20px; }
-  .rec-list li { line-height: 1.8; color: #333; }
-  /* Print button */
-  .print-btn { display: block; margin: 0 auto 32px; padding: 12px 32px;
-               background: #1a1a2e; color: #fff; border: none; border-radius: 8px;
-               font-size: 1rem; font-weight: 700; cursor: pointer; letter-spacing: 0.05em; }
-  .print-btn:hover { background: #0f3460; }
-  @media print {
-    .print-btn { display: none; }
-    body { background: #fff; }
-    .page { padding: 20px; box-shadow: none; }
+${idStyles()}
+  /* Portada */
+  .cover{text-align:center;padding:10px 0 4px;border-bottom:1px solid var(--rule);margin-bottom:4px}
+  .game-name{font-family:var(--serif);font-size:1.55rem;font-weight:700;color:var(--ink);
+             letter-spacing:0.01em;line-height:1.25;background:none;padding:0;text-transform:none;
+             margin:0}
+  .cover-meta{font-size:0.74rem;color:var(--muted);margin-top:8px;line-height:1.6}
+  /* Marcador */
+  .score-block{display:flex;justify-content:center;align-items:center;gap:28px;margin:20px 0 10px;flex-wrap:wrap}
+  .score-team{text-align:center;min-width:90px}
+  .score-name{font-size:0.68rem;font-weight:800;letter-spacing:0.16em;color:var(--muted)}
+  .team-side .score-name{color:var(--ink)}
+  .score-pts{font-family:var(--serif);font-size:3.6rem;font-weight:700;color:var(--ink);line-height:1}
+  .team-side{border-bottom:4px solid var(--team);padding-bottom:6px}
+  .team-side .score-pts{color:var(--ink)}
+  .score-vs{font-size:0.85rem;font-weight:700;color:var(--muted);letter-spacing:0.1em}
+  .outcome{text-align:center;font-size:0.7rem;font-weight:800;letter-spacing:0.18em;
+           padding:7px 18px;border-radius:2px;width:fit-content;margin:2px auto 4px;color:#fff}
+  .outcome-win{background:#1a6b3c}.outcome-loss{background:#a02020}.outcome-draw{background:#5c5348}
+  /* KPIs */
+  .kpi-row{display:flex;gap:10px;margin:18px 0 26px;flex-wrap:wrap}
+  .kpi{flex:1 1 92px;text-align:center;padding:14px 8px;background:var(--paper-2);
+       border:1px solid var(--rule);border-top:3px solid var(--base);border-radius:2px}
+  .kpi-val{font-family:var(--serif);font-size:1.75rem;font-weight:700;color:var(--ink);line-height:1}
+  .kpi-lbl{font-size:0.62rem;font-weight:800;letter-spacing:0.16em;color:var(--muted);margin-top:5px}
+  /* Tabla del equipo */
+  .team-table{width:100%;border-collapse:collapse}
+  .team-table td{padding:9px 12px;border-bottom:1px solid var(--rule)}
+  .team-table td:first-child{color:var(--muted);width:55%}
+  .team-table td:last-child{font-weight:700;font-size:1.02rem;font-family:var(--serif)}
+  .team-table tr:last-child td{border-bottom:none}
+  /* Tabla individual */
+  .table-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--rule);border-radius:2px}
+  .stats-table{width:100%;min-width:760px;border-collapse:collapse;font-size:0.8rem}
+  .stats-table th{background:var(--ink);color:#fff;font-weight:700;padding:7px 8px;text-align:center;
+                  white-space:nowrap;font-size:0.64rem;letter-spacing:0.06em;text-transform:uppercase}
+  .stats-table th:first-child{text-align:left}
+  .stats-table td{padding:6px 8px;text-align:center;border-bottom:1px solid var(--rule);white-space:nowrap}
+  .stats-table td:first-child{text-align:left;font-weight:600}
+  .stats-table tr:nth-child(even) td{background:var(--paper-2)}
+  .stats-table .lead-cell{background:var(--paper-2)!important;font-weight:700;
+    box-shadow:inset 3px 0 0 var(--accent)}
+  @supports (background:color-mix(in srgb,red 20%,#fff)){
+    .stats-table .lead-cell{background:color-mix(in srgb,var(--accent) 20%,#fff)!important}
   }
+  .stats-table .total-row td{background:var(--paper-2);font-weight:700;border-top:2px solid var(--ink)}
+  .foul-note{font-size:0.74rem;color:#a02020;margin-top:8px}
+  .lead-legend{font-size:0.7rem;color:var(--muted);margin-top:8px}
+  /* Podio */
+  .podium{display:flex;flex-direction:column;gap:12px}
+  .top-player{border:1px solid var(--rule);border-left:4px solid var(--rule);border-radius:2px;
+              padding:14px 16px;background:#fff}
+  .top-player.rank-1{border-left-color:var(--base);background:var(--paper-2)}
+  .top-player.rank-2{border-left-color:var(--accent)}
+  .top-player.rank-3{border-left-color:var(--rule)}
+  .top-player-head{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+  .medal{font-size:1.7rem;line-height:1;flex-shrink:0}
+  .top-player-name{font-family:var(--serif);font-weight:700;font-size:1.05rem}
+  .top-player-val{font-size:0.7rem;font-weight:700;letter-spacing:0.1em;color:var(--muted);
+                  text-transform:uppercase;margin-top:2px}
+  .top-player ul{padding-left:20px;columns:2;column-gap:24px}
+  .top-player li{line-height:1.7;color:var(--text);break-inside:avoid}
+  @media (max-width:520px){.top-player ul{columns:1}}
+  /* Análisis */
+  .analysis-table{width:100%;border-collapse:collapse;font-size:0.88rem}
+  .analysis-table td{padding:9px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
+  .analysis-table td:first-child{color:var(--muted);width:42%}
+  .analysis-table td:last-child{font-weight:600}
+  .analysis-table tr:last-child td{border-bottom:none}
+  /* Tips */
+  .tips{display:flex;flex-direction:column;gap:12px}
+  .tip{border:1px solid var(--rule);border-left:5px solid var(--rule);border-radius:2px;padding:13px 16px;background:#fff}
+  .tip-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+  .tip-level{font-size:0.6rem;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;
+             padding:3px 8px;border-radius:2px;color:#fff;white-space:nowrap}
+  .tip-title{font-family:var(--serif);font-weight:700;font-size:1.02rem}
+  .tip-dato{font-size:0.9rem;color:var(--text);line-height:1.6}
+  .tip-accion{font-size:0.9rem;color:var(--muted);line-height:1.6;margin-top:3px}
+  .tip-alta{border-left-color:#a02020}.tip-alta .tip-level{background:#a02020}
+  .tip-media{border-left-color:#8a5a00}.tip-media .tip-level{background:#8a5a00}
+  .tip-fortaleza{border-left-color:#1a6b3c}.tip-fortaleza .tip-level{background:#1a6b3c}
+  /* Recomendaciones */
+  .rec-list{padding-left:20px}
+  .rec-list li{line-height:1.85;color:var(--text)}
 </style>
 </head>
 <body>
 <div class="page">
   <button class="print-btn" onclick="window.print()">🖨️ Guardar como PDF / Imprimir</button>
 
-  <div class="report-header">
-    <div class="emoji">🏀</div>
-    <h1>REPORTE DE PARTIDO</h1>
-    <h2>${gn}</h2>
+  ${idHeader('Reporte de partido', '')}
+
+  <div class="cover">
+    <h2 class="game-name">${gn}</h2>
     ${scoreBlock}
-    <div class="meta">${dateStr} · ${timeStr} · Copa Talento Sub-18</div>
+    <p class="cover-meta">${dateStr} · ${timeStr} · ${T.team} · ${T.league} · ${T.category}</p>
   </div>
+
+  ${kpiHtml}
 
   <section>
     <h3>Resumen Ejecutivo</h3>
@@ -1452,7 +1883,7 @@ function generateReport() {
       <tr><td>FG% (tiros de campo)</td><td>${teamFgA>0 ? pct1(teamFgM/teamFgA) : '--'}</td></tr>
       <tr><td>3PT% (triples)</td><td>${thA>0 ? pct1(thM/thA) : '--'} (${thM}/${thA})</td></tr>
       <tr><td>FT% (tiros libres)</td><td>${ftA>0 ? pct1(ftM/ftA) : '--'} (${ftM}/${ftA}) ${ftA>=5&&ftM/ftA<0.5?'⚠️':''}</td></tr>
-      <tr><td>Rebotes totales</td><td>${totStat('REB_OFF')+totStat('REB_DEF')} (Of: ${totStat('REB_OFF')} / Def: ${totStat('REB_DEF')})</td></tr>
+      <tr><td>Rebotes totales</td><td>${totalReb} (Of: ${totStat('REB_OFF')} / Def: ${totStat('REB_DEF')})</td></tr>
       <tr><td>Asistencias totales</td><td>${totStat('AST')}</td></tr>
       <tr><td>Pérdidas de balón</td><td>${totStat('TOV')} ${totStat('TOV')>15?'⚠️':''}</td></tr>
       <tr><td>Robos / Bloqueos</td><td>${totStat('STL')} / ${totStat('BLK')}</td></tr>
@@ -1463,12 +1894,13 @@ function generateReport() {
 
   <section>
     <h3>Estadísticas Individuales</h3>
+    <div class="table-scroll">
     <table class="stats-table">
       <thead><tr>
         <th>Jugador</th><th>MIN</th><th>PT</th>
         <th>2PT M/A</th><th>3PT M/A</th><th>TL M/A</th>
         <th>FG%</th><th>FT%</th>
-        <th>TO</th><th>REB</th><th>AST</th><th>FALT</th><th>Notas</th>
+        <th>TO</th><th>REB</th><th>AST</th><th>FALT</th><th>VAL</th><th>Notas</th>
       </tr></thead>
       <tbody>${playerRowsHtml}</tbody>
       <tfoot>
@@ -1482,25 +1914,40 @@ function generateReport() {
           <td>${teamFgA>0?pct1(teamFgM/teamFgA):'--'}</td>
           <td>${ftA>0?pct1(ftM/ftA):'--'}</td>
           <td>${totStat('TOV')}</td>
-          <td>${totStat('REB_OFF')+totStat('REB_DEF')}</td>
+          <td>${totalReb}</td>
           <td>${totStat('AST')}</td>
           <td>${totStat('FOUL')}</td>
+          <td>${S.players.reduce((n,p) => n + ((S.minutesPlayed[p]||0)>0 ? valoracion(p) : 0), 0)}</td>
           <td></td>
         </tr>
       </tfoot>
     </table>
+    </div>
     ${hasFO ? '<p class="foul-note">* Eliminado por 5 faltas</p>' : ''}
+    <p class="lead-legend">VAL = valoración (PTS + REB + AST + STL + BLK − pérdidas − tiros fallados). Celda resaltada = líder del equipo en esa columna.</p>
   </section>
 
   <section>
     <h3>Jugadores Destacados</h3>
-    ${topPlayersHtml}
+    <div class="podium">${topPlayersHtml}</div>
+  </section>
+
+  <section>
+    <h3>Análisis del Partido</h3>
+    <table class="analysis-table">${analysisRows}</table>
+  </section>
+
+  <section>
+    <h3>Prioridades para la Próxima Práctica</h3>
+    <div class="tips">${tipsHtml}</div>
   </section>
 
   <section>
     <h3>Recomendaciones para el Próximo Partido</h3>
     <ul class="rec-list">${recsHtml}</ul>
   </section>
+
+  ${idFooter()}
 </div>
 </body>
 </html>`;
