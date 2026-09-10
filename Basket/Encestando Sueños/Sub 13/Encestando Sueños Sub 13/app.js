@@ -982,26 +982,57 @@ async function saveToHistory(rivalName, rivalScore) {
     fouledOut:     JSON.parse(JSON.stringify(S.fouledOut||{})),
     players:       [...S.players],
   };
-  await fbPush(game);
+  const fbKey = await fbPush(game);
   toast('📚 Partido guardado en historial');
+  return fbKey;
 }
+
+/* ¿Hay algo que guardar en el partido en curso? */
+function hasCurrentGameData() {
+  return totalPts() > 0 || S.players.some(p => (S.minutesPlayed[p]||0) > 0);
+}
+
+/* Guarda el partido en curso con el marcador del rival ya resuelto.
+   La usa el botón del Historial. NO abre ningún prompt: el Historial vive en
+   otra ventana y, mientras esa ventana tiene el foco, el navegador descarta
+   los diálogos de la ventana de la app — el prompt volvía null y el guardado
+   se cancelaba en silencio. El campo de puntos del rival ahora está dentro
+   del Historial y el valor llega por parámetro.
+   Devuelve {ok, error} para que el Historial pueda mostrar qué pasó. */
+async function saveCurrentToHistoryWithScore(rivalScore) {
+  if (!hasCurrentGameData())
+    return { ok:false, error:'la app no tiene estadísticas cargadas en este momento' };
+  const rivalName = S.gameName.replace(/.*vs\s*/i, '').trim() || '???';
+  let fbKey = null;
+  try {
+    fbKey = await saveToHistory(rivalName, rivalScore);
+  } catch (e) {
+    return { ok:false, error:(e && e.message) || 'error inesperado al guardar' };
+  }
+  if (!fbKey)
+    return { ok:false, offline:true,
+             error:'no se pudo llegar a Firebase. El partido quedó guardado solo en este dispositivo; con internet, vuelve a intentarlo.' };
+  return { ok:true, fbKey };
+}
+
+/* Compatibilidad: mismo comportamiento de siempre, con prompt. Sirve cuando se
+   llama desde la propia ventana de la app (donde el prompt sí se muestra). */
 async function saveCurrentToHistory() {
-  if (totalPts() === 0 && !S.players.some(p => (S.minutesPlayed[p]||0) > 0)) {
+  if (!hasCurrentGameData()) {
     toast('No hay estadísticas para guardar en el historial');
     return false;
   }
   const rivalScoreRaw = prompt('¿Cuántos puntos hizo el rival? (Enter para saltar)', '');
   if (rivalScoreRaw === null) return false;  // cancelled
   const rivalScore = rivalScoreRaw.trim() !== '' ? parseInt(rivalScoreRaw, 10) : null;
-  const rivalName = S.gameName.replace(/.*vs\s*/i, '').trim() || '???';
-  await saveToHistory(rivalName, rivalScore);
-  return true;
+  const r = await saveCurrentToHistoryWithScore(rivalScore);
+  return !!(r && r.ok);
 }
-
 
 async function openHistorial() {
   const history = await fbGet();
   const T = TRACKER_ID;
+  const cur = { name: S.gameName, pts: totalPts(), hasData: hasCurrentGameData() };
 
   /* ── Season totals per player ── */
   const allPlayers = [...new Set(history.flatMap(g => g.players))];
@@ -1178,27 +1209,67 @@ ${idStyles()}
   .save-bar{background:var(--paper-2);border:1px solid var(--rule);border-left:4px solid var(--base);
             border-radius:2px;padding:14px 16px;margin-bottom:22px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
   .save-bar-label{color:var(--ink);font-size:0.85rem;flex:1 1 160px;margin:0}
+  .save-bar-text{flex:1 1 200px;min-width:0}
+  .save-bar-game{font-size:0.76rem;color:var(--muted);margin-top:3px}
+  .rival-field{display:flex;flex-direction:column;gap:3px;font-size:0.66rem;font-weight:700;
+               letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);flex-shrink:0}
+  .rival-field input{width:84px;padding:8px 10px;border:1px solid var(--rule);border-radius:2px;
+                     font-size:1rem;font-family:var(--serif);font-weight:700;color:var(--text);
+                     background:#fff;text-align:center}
+  .rival-field input:focus-visible{outline:3px solid var(--accent);outline-offset:1px}
   .save-current-btn{background:#1a6b3c;color:#fff;border:none;border-radius:2px;padding:11px 18px;
                     font-size:0.9rem;font-weight:700;cursor:pointer;flex-shrink:0;white-space:nowrap;font-family:inherit}
   .save-current-btn:hover{background:#14532b}
+  .save-current-btn:disabled,.rival-field input:disabled{opacity:0.5;cursor:not-allowed}
+  .save-msg{margin:-14px 0 20px;padding:10px 14px;border-radius:2px;font-size:0.86rem;font-weight:600}
+  .save-msg.ok{background:#e8f3ec;color:#14532b;border-left:4px solid #1a6b3c}
+  .save-msg.err{background:#fbeaea;color:#7d1a1a;border-left:4px solid #a02020}
   .del-game-btn{margin-left:auto;background:none;border:none;font-size:1rem;cursor:pointer;opacity:0.45;
                 padding:3px 6px;border-radius:2px;flex-shrink:0;line-height:1}
   .del-game-btn:hover{opacity:1;background:#fbe9e9}
-  @media print{.print-btn,.save-bar,.del-game-btn{display:none}
+  @media print{.print-btn,.save-bar,.save-msg,.del-game-btn{display:none}
     .game-item{border-color:#bbb}
     details{display:block}
     details>summary{list-style:none}}
 </style>
 </head>
 <script>
+/* El guardado ocurre aquí, en la ventana del Historial. No se usa prompt():
+   mientras esta ventana tiene el foco, el navegador descarta los diálogos de
+   la ventana de la app, y el guardado se cancelaba en silencio. */
+function saveMsg(texto, clase) {
+  const el = document.getElementById('saveMsg');
+  el.textContent = texto;
+  el.className = 'save-msg ' + clase;
+  el.hidden = false;
+}
 async function doSaveCurrent() {
+  const btn = document.getElementById('btnSaveCurrent');
   if (!window.opener || window.opener.closed) {
-    alert('Cierra el historial y vuelve a abrirlo desde la app.');
+    saveMsg('Se perdió el vínculo con la app. Cierra esta ventana y vuelve a abrir el Historial desde la app.', 'err');
     return;
   }
-  const saved = await window.opener.saveCurrentToHistory();
-  if (saved) { window.opener.openHistorial(); window.close(); }
+  const raw = (document.getElementById('rivalPts').value || '').trim();
+  if (raw !== '' && !/^\d{1,3}$/.test(raw)) {
+    saveMsg('Los puntos del rival tienen que ser un número entero. Déjalo vacío si no lo sabes.', 'err');
+    return;
+  }
+  const rivalScore = raw === '' ? null : parseInt(raw, 10);
+  btn.disabled = true;
+  saveMsg('Guardando…', 'ok');
+  let r;
+  try { r = await window.opener.saveCurrentToHistoryWithScore(rivalScore); }
+  catch (e) { r = { ok:false, error:(e && e.message) || 'error inesperado' }; }
+  if (r && r.ok) {
+    saveMsg('✓ Partido guardado en el historial', 'ok');
+    window.opener.openHistorial();
+    window.close();
+  } else {
+    btn.disabled = false;
+    saveMsg('No se guardó: ' + ((r && r.error) || 'error desconocido'), 'err');
+  }
 }
+function onRivalKey(e) { if (e.key === 'Enter') { e.preventDefault(); doSaveCurrent(); } }
 async function deleteGame(fbKey, idx) {
   if (!confirm('¿Eliminar este partido del historial? Esta acción no se puede deshacer.')) return;
   if (!window.opener || window.opener.closed) { alert('Cierra y vuelve a abrir el historial desde la app.'); return; }
@@ -1210,9 +1281,19 @@ async function deleteGame(fbKey, idx) {
 <body><div class="page">
   <button class="print-btn" onclick="window.print()">🖨️ Imprimir / Guardar PDF</button>
   <div class="save-bar">
-    <p class="save-bar-label">¿Terminaste el partido? Guárdalo para que aparezca en el historial.</p>
-    <button class="save-current-btn" onclick="doSaveCurrent()">💾 Guardar Partido Actual</button>
+    <div class="save-bar-text">
+      <p class="save-bar-label">¿Terminaste el partido? Guárdalo para que aparezca en el historial.</p>
+      <p class="save-bar-game">${cur.hasData
+        ? `${cur.name} · ${cur.pts} punto${cur.pts!==1?'s':''} cargados en la app`
+        : 'La app no tiene estadísticas cargadas ahora mismo'}</p>
+    </div>
+    <label class="rival-field" for="rivalPts">Puntos del rival
+      <input id="rivalPts" type="number" min="0" max="999" step="1" inputmode="numeric"
+             placeholder="—" onkeydown="onRivalKey(event)" ${cur.hasData?'':'disabled'}>
+    </label>
+    <button class="save-current-btn" id="btnSaveCurrent" onclick="doSaveCurrent()" ${cur.hasData?'':'disabled'}>💾 Guardar Partido Actual</button>
   </div>
+  <p id="saveMsg" class="save-msg" hidden></p>
 
   ${idHeader('Historial de temporada', `${history.length} partido${history.length!==1?'s':''} registrado${history.length!==1?'s':''}`)}
 
