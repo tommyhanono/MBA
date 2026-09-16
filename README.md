@@ -34,6 +34,22 @@ MBA/
             └── Encestando Sueños Sub 17/
 ```
 
+## 📲 Seguir el partido en otra computadora
+
+Marcas Q1 y Q2 en una compu, te pasas a otra y sigues el **mismo partido** sin perder nada.
+
+1. En la compu que lleva el partido: **📲 Pasar a otra compu**. Sale un código de 4 dígitos y
+   esa compu queda en solo lectura.
+2. En la otra: abre el mismo tracker, aparece el banner *"Partido en curso en …"*, aprieta
+   **Continuar aquí** y escribe el código.
+3. Llega todo: marcador, cuarto, reloj, nómina y estadísticas. **El reloj llega pausado** y el
+   botón Deshacer arranca limpio (la pila de deshacer no viaja).
+
+Si la otra compu lleva más de 90 segundos sin señal, puedes continuar sin código. Sin internet
+sigues registrando normal en tu compu; se sube solo cuando vuelve.
+
+El detalle técnico está en el [README de Titans](https://github.com/tommyhanono/Titans#-traspaso-del-partido-entre-computadoras).
+
 ## Cómo configurar
 
 1. Abrir el link del equipo correspondiente

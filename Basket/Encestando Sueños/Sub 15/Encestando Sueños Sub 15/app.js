@@ -224,6 +224,9 @@ function save() {
     const { history, ...toSave } = S;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
   } catch(e) { console.warn('Error guardando:', e); }
+  /* La nube va DESPUÉS del guardado local y en su propio try/catch: si Firebase
+     está caído o no hay internet, la app sigue exactamente como antes. */
+  try { if (typeof liveOnSave === 'function') liveOnSave(); } catch(e) {}
 }
 
 function loadSaved() {
@@ -2323,4 +2326,849 @@ document.addEventListener('DOMContentLoaded', async () => {
   registerSW();
   fbLog('app_open', { players: S.players||[] });
   sessStart();
+  liveStart();
 });
+
+/* ═══ LIVE-START ═══════════════════════════════════════════════════════════
+   TRASPASO DE SESIÓN EN VIVO ENTRE COMPUTADORAS
+   ---------------------------------------------------------------------------
+   Fuente única: _tests/blocks/live.js  →  inyectado en los 8 app.js por
+   _tests/build-trackers.mjs. NO editar esta región dentro de un app.js: se
+   pierde en el siguiente build.
+
+   Modelo: DUEÑO ÚNICO. Solo el dispositivo que figura como owner en
+   /live/{FB_NODE}/owner escribe /live/{FB_NODE}/state. Cualquier otro queda en
+   solo lectura. Por eso dos computadoras no se pueden pisar nunca.
+
+   Nodo nuevo y separado (no toca historial, plantillas, kill switch ni
+   telemetría):
+     /live/{FB_NODE}
+       rev        sube 1 en cada escritura de estado
+       updatedAt  Date.now()
+       owner      { deviceId, name, beat }
+       handoff    { code, at } | null
+       state      todo S MENOS history
+
+   Qué NO viaja: la pila de deshacer (S.history), igual que hoy no se guarda en
+   localStorage. El reloj siempre llega PAUSADO.
+
+   Regla dura: esta capa jamás bloquea ni rompe el guardado local. save()
+   escribe a localStorage primero y recién después llama a liveOnSave(), que va
+   en su propio try/catch y no puede lanzar.
+═══════════════════════════════════════════════════════════════════════════ */
+
+const LIVE_BASE       = `${FB_BASE}/live/${FB_NODE}`;
+const LIVE_POLL_MS    = 5000;    // sondeo
+const LIVE_BEAT_MS    = 10000;   // latido del dueño
+const LIVE_DEAD_MS    = 90000;   // sin latido por más de esto = dueño muerto
+const LIVE_MIN_UP_MS  = 3000;    // mínimo entre subidas de estado
+const LIVE_REQ_MS     = 8000;    // timeout de cada request
+const LIVE_BACKUP_KEY = STORAGE_KEY + '_recuperado';
+const LIVE_NAME_KEY   = 'bk_device_name';
+
+/* Botones que SÍ funcionan en solo lectura (no modifican el partido). */
+const LIVE_ALLOW_IDS = ['btnReport', 'btnHistorial', 'btnTable', 'btnCloseTable'];
+
+/* Funciones que modifican el partido: se envuelven para que no hagan nada
+   mientras esta compu está en solo lectura. */
+const LIVE_GUARDED = [
+  'logStat', 'toggleCourt', 'undoLast', 'toggleClock', 'resetClock',
+  'addPlayer', 'removePlayer', 'newGame', 'manualLoad',
+  'loadTemplate', 'saveCurrentAsTemplate', 'deleteTemplate', 'setDefaultTemplate',
+];
+
+const LIVE = {
+  on:         false,      // el motor arrancó
+  booting:    true,       // todavía no sé quién lleva el partido: no subo nada
+  role:       'owner',    // 'owner' | 'observer'
+  handingOff: false,      // soy dueño pero entregué: solo lectura con código a la vista
+  readonly:   false,      // arranca usable: la app funciona igual que antes hasta
+                          // que el arranque diga lo contrario (1s después)
+  handoff:    null,       // { code, at } cuando YO estoy entregando
+  ownerInfo:  null,       // último owner visto en la nube
+  remote:     null,       // último nodo completo visto (solo cuando soy observador)
+  rev:        0,
+  net:        false,      // última operación de red salió bien
+  failStreak: 0,          // fallos seguidos (evita que el aviso parpadee)
+  dirty:      false,      // hubo un fallo de red desde la última confirmación
+  lastPollOk: 0,
+  lastUpOk:   0,
+  lastUpTry:  0,
+  upTimer:    null,
+  myName:     '',
+  lostNotified: false,
+  backupSaved:  false,
+  transferredTo: null,
+};
+
+/* ═══ RED ═════════════════════════════════════════════════════════════════ */
+/* Toda la red de esta capa pasa por acá: nunca lanza, siempre cache:'no-store'. */
+async function liveReq(path, init) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => { try { ctl.abort(); } catch(e) {} }, LIVE_REQ_MS);
+  try {
+    const r = await fetch(`${LIVE_BASE}${path}.json`, Object.assign(
+      { cache: 'no-store', signal: ctl.signal }, init || {}));
+    if (!r.ok) throw new Error('http ' + r.status);
+    const data = await r.json();
+    LIVE.net = true;
+    LIVE.failStreak = 0;
+    return { ok: true, data };
+  } catch(e) {
+    LIVE.net = false;
+    LIVE.failStreak++;
+    LIVE.dirty = true;      // no sé qué pasó allá afuera: verificar antes de escribir
+    return { ok: false, data: null };
+  } finally { clearTimeout(timer); }
+}
+
+function liveJson(method, body) {
+  return { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+}
+
+/* Nombre bonito del dispositivo: el que el admin ya asigna en /devices/{id}/name.
+   Si no tiene, se muestra el modelo y el navegador ("Mac · Chrome"). */
+async function liveLoadName() {
+  let cached = '';
+  try { cached = localStorage.getItem(LIVE_NAME_KEY) || ''; } catch(e) {}
+  LIVE.myName = cached || `${DEV_INFO.device} · ${DEV_INFO.browser}`;
+  try {
+    const r = await fetch(`${FB_BASE}/devices/${DEV_ID}/name.json`, { cache: 'no-store' });
+    const v = await r.json();
+    if (v && typeof v === 'string' && v.trim()) {
+      LIVE.myName = v.trim();
+      try { localStorage.setItem(LIVE_NAME_KEY, LIVE.myName); } catch(e) {}
+    }
+  } catch(e) {}
+}
+
+/* ═══ ESTADO QUE VIAJA ════════════════════════════════════════════════════ */
+/* Exactamente lo mismo que ya persiste save(): todo S MENOS history. */
+function liveStatePayload() {
+  const { history, ...st } = S;
+  return st;
+}
+
+function liveScoreOf(st) {
+  try {
+    const s = (st && st.stats) || {};
+    let n = 0;
+    for (const p of Object.keys(s)) {
+      const q = s[p] || {};
+      n += (q['2PT_MADE'] || 0) * 2 + (q['3PT_MADE'] || 0) * 3 + (q['FT_MADE'] || 0);
+    }
+    return n;
+  } catch(e) { return 0; }
+}
+
+function liveOwnerName(o) {
+  if (!o) return 'otra compu';
+  return (o.name && String(o.name).trim()) || 'otra compu';
+}
+
+function liveIsAlive(o) {
+  return !!(o && o.deviceId && (Date.now() - (o.beat || 0) < LIVE_DEAD_MS));
+}
+
+function liveMinsSince(ms) {
+  const m = Math.max(1, Math.round((Date.now() - (ms || 0)) / 60000));
+  return m;
+}
+
+function liveHace(ms) {
+  if (!ms) return 'nunca';
+  const s = Math.round((Date.now() - ms) / 1000);
+  if (s < 60) return `hace ${s}s`;
+  return `hace ${Math.round(s / 60)} min`;
+}
+
+/* ═══ SUBIDA (solo el dueño) ══════════════════════════════════════════════ */
+async function liveUpload(force) {
+  if (!LIVE.on || LIVE.booting || LIVE.role !== 'owner' || LIVE.readonly) return false;
+
+  const now = Date.now();
+  if (!force && now - LIVE.lastUpTry < LIVE_MIN_UP_MS) {
+    /* Debounce: mínimo 3s entre subidas. Se reprograma una sola vez. */
+    if (!LIVE.upTimer) {
+      LIVE.upTimer = setTimeout(() => {
+        LIVE.upTimer = null;
+        liveUpload(false).catch(() => {});
+      }, LIVE_MIN_UP_MS - (now - LIVE.lastUpTry) + 50);
+    }
+    return false;
+  }
+  LIVE.lastUpTry = now;
+
+  /* SIEMPRE se verifica la propiedad antes de escribir el estado. Cuesta un GET
+     chiquito cada 3s como mucho, y es lo único que cierra del todo la carrera:
+     cualquier heurística de tiempo o de "hubo un fallo de red" deja una ventana
+     por la que una subida pendiente le pisa el partido a la otra compu. */
+  if (!(await liveConfirmarDueno())) return false;
+
+  const rev  = (LIVE.rev || 0) + 1;
+  const body = {
+    rev,
+    updatedAt: Date.now(),
+    owner: { deviceId: DEV_ID, name: LIVE.myName, beat: Date.now() },
+    state: liveStatePayload(),
+  };
+  const r = await liveReq('', liveJson('PATCH', body));
+  if (r.ok) { LIVE.rev = rev; LIVE.lastUpOk = Date.now(); }
+  liveRenderStatus();
+  return r.ok;
+}
+
+/* Pregunta a Firebase si esta compu sigue siendo la dueña.
+   true  = sí, puedo escribir.
+   false = no puedo (o perdí la propiedad, o sigo sin señal). */
+async function liveConfirmarDueno() {
+  const chk = await liveReq('/owner');
+  if (!chk.ok) { liveRenderStatus(); return false; }     // sigo sin señal
+  LIVE.lastPollOk = Date.now();
+  const o = chk.data;
+  if (o && o.deviceId && o.deviceId !== DEV_ID) { liveLoseOwnership(o); return false; }
+  LIVE.dirty = false;
+  return true;
+}
+
+/* Gancho que llama save() DESPUÉS de haber escrito localStorage.
+   No devuelve promesa ni lanza: el guardado local nunca depende de esto. */
+function liveOnSave() {
+  if (!LIVE.on || LIVE.booting || LIVE.role !== 'owner' || LIVE.readonly) return;
+  try { Promise.resolve().then(() => liveUpload(false)).catch(() => {}); } catch(e) {}
+}
+
+async function liveBeat() {
+  if (!LIVE.on || LIVE.booting || LIVE.role !== 'owner') return;
+  /* Si venimos de un corte, el latido esperaría a la confirmación del sondeo:
+     escribir el owner a ciegas sería robarle el partido a quien lo tomó. */
+  if (LIVE.dirty) return;
+  await liveReq('/owner', liveJson('PATCH', { deviceId: DEV_ID, name: LIVE.myName, beat: Date.now() }));
+  liveRenderStatus();
+}
+
+/* ═══ SONDEO ══════════════════════════════════════════════════════════════ */
+async function livePoll() {
+  if (!LIVE.on || LIVE.booting) return;
+  const asOwner = (LIVE.role === 'owner');
+
+  /* El dueño solo necesita saber si dejó de serlo: pide el owner, que es chico.
+     El observador pide el nodo entero porque necesita el estado para el banner. */
+  const r = await liveReq(asOwner ? '/owner' : '');
+  if (!r.ok) { liveRenderStatus(); return; }
+  LIVE.lastPollOk = Date.now();
+
+  if (asOwner) {
+    const owner = r.data;
+    if (owner && owner.deviceId && owner.deviceId !== DEV_ID) { liveLoseOwnership(owner); return; }
+    LIVE.ownerInfo = owner || null;
+    LIVE.dirty = false;              // confirmado: sigo llevando el partido
+  } else {
+    const node = r.data || {};
+    LIVE.rev       = node.rev || 0;
+    LIVE.ownerInfo = node.owner || null;
+    LIVE.remote    = node;
+    liveRenderBanner();
+  }
+  liveRenderStatus();
+}
+
+/* Perdí la propiedad. Si no la entregué yo, guardo mi copia local aparte:
+   nunca se pierde nada en silencio. */
+function liveLoseOwnership(newOwner) {
+  const entregado = LIVE.handingOff;
+  LIVE.role          = 'observer';
+  LIVE.handingOff    = false;
+  LIVE.handoff       = null;
+  LIVE.ownerInfo     = newOwner || null;
+  LIVE.transferredTo = liveOwnerName(newOwner);
+  liveSetReadonly(true);
+
+  if (!entregado && !LIVE.lostNotified) {
+    LIVE.lostNotified = true;
+    try {
+      localStorage.setItem(LIVE_BACKUP_KEY, JSON.stringify({
+        savedAt: Date.now(), tracker: FB_NODE, state: liveStatePayload(),
+      }));
+      LIVE.backupSaved = true;
+    } catch(e) { LIVE.backupSaved = false; }
+  }
+  liveRenderStatus();
+  liveRenderBanner();
+  liveModalTransferido(entregado);
+}
+
+/* ═══ HIDRATAR (misma lógica defensiva que loadSaved) ═════════════════════ */
+function liveHydrate(raw) {
+  if (!raw || typeof raw !== 'object') return false;
+  let d = raw;
+  try { d = migrateIfNeeded(raw); } catch(e) { d = raw; }
+  S = {
+    gameName:      d.gameName      ?? S.gameName,
+    quarter:       d.quarter       ?? S.quarter,
+    secsLeft:      d.secsLeft      ?? QUARTER_SECS,
+    clockRunning:  false,                       // el reloj SIEMPRE llega pausado
+    players:       d.players       ?? S.players,
+    stats:         d.stats         ?? S.stats,
+    minutesPlayed: d.minutesPlayed ?? S.minutesPlayed,
+    onCourt:       d.onCourt       ?? [],
+    fouledOut:     d.fouledOut     ?? {},
+    selected:      d.selected      ?? (d.players?.[0] ?? S.players[0]),
+    history:       [],                          // la pila de deshacer no viaja
+  };
+  S.players.forEach(ensurePlayer);
+  /* A propósito NO se mezclan los DEFAULT_PLAYERS: la nómina que manda es la de
+     la compu que venía llevando el partido (pudo haber sacado a alguien). */
+  return true;
+}
+
+/* ═══ TOMAR EL CONTROL ════════════════════════════════════════════════════ */
+async function liveTakeControl(code) {
+  if (!LIVE.on) return { ok: false, error: 'La sesión en vivo no está activa.' };
+
+  const r = await liveReq('');
+  if (!r.ok) return { ok: false, error: 'Necesitas internet para tomar el control. Revisa la conexión y vuelve a intentar.' };
+
+  const node  = r.data || {};
+  const owner = node.owner || null;
+  const mine  = !!(owner && owner.deviceId === DEV_ID);
+  const alive = liveIsAlive(owner);
+
+  if (alive && !mine) {
+    const h = node.handoff;
+    if (!h || !h.code) {
+      return { ok: false, error: `El partido lo está llevando ${liveOwnerName(owner)} y no lo ha puesto en traspaso. Apreta "📲 Pasar a otra compu" en esa compu primero.` };
+    }
+    if (String(code || '').trim() !== String(h.code)) {
+      return { ok: false, error: 'El código no coincide. Míralo otra vez en la otra compu.' };
+    }
+  }
+
+  const rev  = (node.rev || 0) + 1;
+  const now  = Date.now();
+  const w = await liveReq('', liveJson('PATCH', {
+    rev, updatedAt: now,
+    owner: { deviceId: DEV_ID, name: LIVE.myName, beat: now },
+    handoff: null,
+  }));
+  if (!w.ok) return { ok: false, error: 'No se pudo tomar el control. Revisa la conexión y vuelve a intentar.' };
+
+  let hidratado = false;
+  if (node.state && !mine) hidratado = liveHydrate(node.state);
+
+  LIVE.rev           = rev;
+  LIVE.booting       = false;
+  LIVE.dirty         = false;
+  LIVE.role          = 'owner';
+  LIVE.handingOff    = false;
+  LIVE.handoff       = null;
+  LIVE.lostNotified  = false;
+  LIVE.transferredTo = null;
+  LIVE.lastPollOk    = Date.now();
+  liveSetReadonly(false);
+
+  save();                       // deja el partido en localStorage de esta compu
+  try { renderAll(); } catch(e) {}
+  liveRenderStatus();
+  liveRenderBanner();
+  return { ok: true, hidratado };
+}
+
+/* ═══ PASAR A OTRA COMPU ══════════════════════════════════════════════════ */
+async function liveStartHandoff() {
+  if (!LIVE.on)              { toast('La sesión en vivo no está activa'); return { ok:false }; }
+  if (LIVE.role !== 'owner') { toast('Esta compu no lleva el partido'); return { ok:false }; }
+  if (LIVE.handingOff)       { liveModalHandoff(LIVE.handoff && LIVE.handoff.code); return { ok:true }; }
+
+  /* 1. Sube el estado final, forzado y sin debounce. */
+  const subido = await liveUpload(true);
+  if (!subido) {
+    liveModalAviso('Sin internet', 'No pude subir el partido, así que no puedo pasarlo a otra compu. Conéctate y vuelve a intentar. Mientras tanto sigue registrando aquí: no se pierde nada.');
+    return { ok: false };
+  }
+
+  /* 2. Código de 4 dígitos. */
+  const code = String(Math.floor(1000 + Math.random() * 9000));
+  const w = await liveReq('/handoff', liveJson('PUT', { code, at: Date.now() }));
+  if (!w.ok) {
+    liveModalAviso('Sin internet', 'No pude generar el traspaso. Revisa la conexión y vuelve a intentar.');
+    return { ok: false };
+  }
+
+  /* 3. Esta compu queda en solo lectura de inmediato: así no hay carrera. */
+  LIVE.handoff    = { code, at: Date.now() };
+  LIVE.handingOff = true;
+  liveSetReadonly(true);
+  liveModalHandoff(code);
+  liveRenderStatus();
+  return { ok: true, code };
+}
+
+async function liveCancelHandoff() {
+  if (!LIVE.handingOff) { liveCloseModal(); return; }
+  const w = await liveReq('/handoff', { method: 'DELETE' });
+  if (!w.ok) {
+    liveModalAviso('Sin internet', 'No pude cancelar el traspaso porque no hay conexión. Vuelve a intentar en un momento.');
+    return;
+  }
+  LIVE.handoff    = null;
+  LIVE.handingOff = false;
+  liveSetReadonly(false);
+  liveCloseModal();
+  liveRenderStatus();
+  toast('Traspaso cancelado — ya puedes seguir registrando aquí');
+}
+
+/* ═══ SOLO LECTURA ════════════════════════════════════════════════════════ */
+function liveSetReadonly(v) {
+  LIVE.readonly = !!v;
+  if (LIVE.readonly) {
+    /* El reloj no puede seguir corriendo en una compu que ya no lleva el partido. */
+    try {
+      if (S && S.clockRunning) { S.clockRunning = false; updateClockBtn(); }
+    } catch(e) {}
+  }
+  try {
+    const app = document.getElementById('app');
+    if (app) app.classList.toggle('live-ro', LIVE.readonly);
+    const gn = document.getElementById('gameName');
+    if (gn) gn.readOnly = LIVE.readonly;
+  } catch(e) {}
+  liveRenderBanner();
+}
+
+function liveBlockedFeedback() {
+  const quien = LIVE.handingOff
+    ? 'Estás pasando el partido a otra compu'
+    : `El partido lo lleva ${liveOwnerName(LIVE.ownerInfo)}`;
+  toast(`🔒 Solo lectura — ${quien}. Toma el control para registrar aquí.`);
+}
+
+/* Envuelve las funciones que modifican el partido. En classic script las
+   declaraciones de función son propiedades del objeto global, así que
+   reasignarlas alcanza para interceptar cualquier llamada. */
+function liveInstallGuards() {
+  const g = (typeof window !== 'undefined') ? window : globalThis;
+  LIVE_GUARDED.forEach(name => {
+    const orig = g[name];
+    if (typeof orig !== 'function' || orig.__liveGuarded) return;
+    const wrapped = function(...args) {
+      if (LIVE.readonly) { liveBlockedFeedback(); return; }
+      return orig.apply(this, args);
+    };
+    wrapped.__liveGuarded = true;
+    try { g[name] = wrapped; } catch(e) {}
+  });
+}
+
+/* No alcanza con ignorar el clic: hay que atajarlo antes de que llegue a los
+   listeners de la app y explicarle al entrenador por qué no responde. */
+function liveInstallClickGuard() {
+  document.addEventListener('click', e => {
+    if (!LIVE.readonly) return;
+    const t = e.target;
+    if (!t || typeof t.closest !== 'function') return;
+    if (t.closest('.live-ui')) return;                     // la UI de esta capa
+    const el = t.closest('button, .player-btn, .stat-btn, .court-btn');
+    if (!el) return;
+    if (LIVE_ALLOW_IDS.indexOf(el.id) !== -1) return;      // Resumen / Historial / Tabla
+    if (el.closest('#tableSection')) return;               // la tabla es solo lectura
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+    liveBlockedFeedback();
+  }, true);
+}
+
+/* ═══ UI ══════════════════════════════════════════════════════════════════ */
+function liveInjectStyles() {
+  if (document.getElementById('liveStyles')) return;
+  const st = document.createElement('style');
+  st.id = 'liveStyles';
+  st.textContent = [
+    '.live-dot{display:inline-flex;align-items:center;justify-content:center;background:#0a1628;border:1px solid #1e3a5f;border-radius:999px;width:26px;height:26px;padding:0;cursor:pointer;flex:0 0 auto}',
+    '.live-dot i{width:10px;height:10px;border-radius:50%;background:#1e8449;display:block;flex:0 0 auto}',
+    '.live-dot:focus-visible{outline:2px solid #f1c40f;outline-offset:2px}',
+    '.live-dot.amber i{background:#f1c40f}.live-dot.blue i{background:#3b9ae1}',
+    '.live-dot.amber{border-color:#6b5300}.live-dot.blue{border-color:#1d4e73}',
+    '#liveBanner{display:none;flex-shrink:0;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 12px;background:#0f3460;border-bottom:1px solid #1e8449;color:#fff;font-size:.78rem;line-height:1.35}',
+    '#liveBanner.amber{background:#3d2f05;border-bottom-color:#f1c40f}',
+    '#liveBanner.show{display:flex}',
+    '#liveBanner .lb-txt{flex:1 1 200px;min-width:0}',
+    '#liveBanner .lb-strong{font-weight:800}',
+    '#liveBanner .lb-sub{display:block;color:#a9c4de;font-size:.7rem;margin-top:2px}',
+    '.live-btn{background:#1e8449;color:#fff;border-radius:10px;padding:9px 16px;font-size:.8rem;font-weight:800;min-height:40px;border:none;cursor:pointer}',
+    '.live-btn.ghost{background:#16213e;color:#d0d0d0;border:1px solid #2b4a72}',
+    '.live-btn.danger{background:#5c0a0a;color:#ffd7d7;border:1px solid #8b1a1a}',
+    '.live-btn:active{transform:scale(.97)}',
+    '.live-btn:focus-visible,#btnLiveHandoff:focus-visible{outline:2px solid #f1c40f;outline-offset:2px}',
+    '@media (prefers-reduced-motion: reduce){.live-btn:active{transform:none}}',
+    '#liveOverlay{position:fixed;inset:0;z-index:99998;background:rgba(10,22,40,.94);display:none;align-items:center;justify-content:center;padding:20px;overflow-y:auto}',
+    '#liveOverlay.show{display:flex}',
+    '.live-card{background:#16213e;border:1px solid #2b4a72;border-radius:16px;max-width:460px;width:100%;padding:22px;text-align:center;color:#fff;font-family:var(--font,system-ui)}',
+    '.live-card h3{font-size:1.05rem;margin-bottom:8px;font-weight:800}',
+    '.live-card p{font-size:.85rem;color:#c3d3e4;line-height:1.5;margin-bottom:14px}',
+    '.live-code{font-size:4.2rem;font-weight:900;letter-spacing:.14em;color:#f1c40f;margin:10px 0 6px;font-variant-numeric:tabular-nums}',
+    '.live-input{width:100%;background:#0a1628;border:2px solid #2b4a72;border-radius:12px;color:#fff;font-size:2.2rem;font-weight:900;text-align:center;letter-spacing:.2em;padding:12px;margin-bottom:12px;font-variant-numeric:tabular-nums}',
+    '.live-input:focus{border-color:#f1c40f}',
+    '.live-row{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:6px}',
+    '.live-err{color:#ffb3b3;font-size:.82rem;min-height:20px;margin-bottom:8px;font-weight:600}',
+    '.live-detail{text-align:left;font-size:.8rem;color:#c3d3e4;line-height:1.7}',
+    '.live-detail b{color:#fff}',
+    '#app.live-ro #statGrid,#app.live-ro #playerList,#app.live-ro #quarterSelector,',
+    '#app.live-ro .hd-clock .icon-btn,#app.live-ro #btnUndo,#app.live-ro #btnSave,',
+    '#app.live-ro #btnLoad,#app.live-ro #btnNewGame,#app.live-ro #btnPlantillas,',
+    '#app.live-ro #btnAdd,#app.live-ro #btnRemove{opacity:.34;filter:grayscale(.75)}',
+    '#app.live-ro #gameName{opacity:.6}',
+    '@media (max-width:520px){.live-code{font-size:3rem}.live-card{padding:16px}}',
+  ].join('\n');
+  document.head.appendChild(st);
+}
+
+function liveInjectUI() {
+  /* Indicador de sync: al principio de .hd-brand, que es lo único del header
+     que se ve a cualquier ancho. Solo el punto de color, para no robarle
+     espacio al nombre del partido; el detalle sale al tocarlo. */
+  const brand = document.querySelector('.hd-brand');
+  if (brand && !document.getElementById('liveDot')) {
+    const d = document.createElement('button');
+    d.id = 'liveDot';
+    d.className = 'live-dot live-ui';
+    d.type = 'button';
+    d.setAttribute('aria-label', 'Estado de la sesión en vivo');
+    d.innerHTML = '<i></i>';
+    d.addEventListener('click', liveModalDetalle);
+    brand.insertBefore(d, brand.firstChild);
+  }
+
+  /* Botón de traspaso en la barra de controles */
+  const bar = document.querySelector('.ctrl-bar');
+  if (bar && !document.getElementById('btnLiveHandoff')) {
+    const b = document.createElement('button');
+    b.id = 'btnLiveHandoff';
+    b.className = 'ctrl-btn live-ui';
+    b.type = 'button';
+    b.textContent = '📲 Pasar a otra compu';
+    b.addEventListener('click', () => { liveStartHandoff().catch(() => {}); });
+    bar.appendChild(b);
+  }
+
+  /* Banner de sesión ajena */
+  const app = document.getElementById('app');
+  const hdr = document.getElementById('header');
+  if (app && hdr && !document.getElementById('liveBanner')) {
+    const ban = document.createElement('div');
+    ban.id = 'liveBanner';
+    ban.className = 'live-ui';
+    hdr.insertAdjacentElement('afterend', ban);
+  }
+
+  /* Overlay de modales */
+  if (!document.getElementById('liveOverlay')) {
+    const ov = document.createElement('div');
+    ov.id = 'liveOverlay';
+    ov.className = 'live-ui';
+    document.body.appendChild(ov);
+  }
+}
+
+function liveRenderStatus() {
+  const dot = document.getElementById('liveDot');
+  if (!dot) return;
+  dot.classList.remove('amber', 'blue');
+  let titulo;
+  if (LIVE.role === 'owner' && !LIVE.readonly) {
+    if (liveSinConexion()) { dot.classList.add('amber'); titulo = 'Sin conexión — estás registrando local, no se pierde nada'; }
+    else                   { titulo = 'Esta compu lleva el partido y está sincronizada'; }
+  } else {
+    dot.classList.add('blue');
+    titulo = LIVE.handingOff
+      ? 'Estás pasando el partido a otra compu'
+      : 'Solo lectura — el partido lo lleva ' + liveOwnerName(LIVE.ownerInfo);
+  }
+  dot.title = titulo + '. Tócalo para ver el detalle.';
+  dot.setAttribute('aria-label', titulo);
+
+  const hb = document.getElementById('btnLiveHandoff');
+  if (hb) {
+    const sirve = (LIVE.role === 'owner');
+    hb.style.opacity = sirve ? '' : '.34';
+    hb.style.filter  = sirve ? '' : 'grayscale(.75)';
+  }
+  liveRenderBanner();
+}
+
+/* Dos fallos seguidos (unos 10s) antes de gritar "sin conexión": si no, el
+   indicador parpadea con cualquier hipo del wifi del gimnasio. */
+function liveSinConexion() { return LIVE.failStreak >= 2; }
+
+function liveRenderBanner() {
+  const ban = document.getElementById('liveBanner');
+  if (!ban) return;
+
+  if (LIVE.role === 'owner' && !LIVE.readonly) {
+    if (liveSinConexion()) {
+      ban.className = 'live-ui show amber';
+      ban.innerHTML = '<div class="lb-txt"><span class="lb-strong">📴 Sin conexión — sigue registrando aquí.</span>' +
+        '<span class="lb-sub">Todo se guarda en esta compu y se sube solo cuando vuelva el internet. ' +
+        'Mientras no haya señal no puedes pasar el partido a otra compu.</span></div>';
+    } else {
+      ban.className = 'live-ui'; ban.innerHTML = '';
+    }
+    return;
+  }
+
+  if (LIVE.handingOff) {
+    ban.className = 'live-ui show';
+    ban.innerHTML = '<div class="lb-txt"><span class="lb-strong">📲 Pasando el partido a otra compu.</span>' +
+      '<span class="lb-sub">Esta compu quedó en solo lectura para que nada se pise.</span></div>';
+    const b = document.createElement('button');
+    b.className = 'live-btn ghost live-ui';
+    b.type = 'button';
+    b.textContent = 'Ver el código';
+    b.addEventListener('click', () => liveModalHandoff(LIVE.handoff && LIVE.handoff.code));
+    ban.appendChild(b);
+    return;
+  }
+
+  const o     = LIVE.ownerInfo;
+  const alive = liveIsAlive(o);
+  const st    = (LIVE.remote && LIVE.remote.state) || null;
+
+  if (!o && !st) { ban.className = 'live-ui'; ban.innerHTML = ''; return; }
+
+  const q     = (st && st.quarter) || '—';
+  const marca = st ? liveScoreOf(st) + ' pts' : 'sin datos';
+  const quien = liveOwnerName(o);
+
+  ban.className = 'live-ui show';
+  if (alive) {
+    ban.innerHTML = '<div class="lb-txt"><span class="lb-strong">Partido en curso en ' + liveEsc(quien) +
+      '</span> · ' + liveEsc(q) + ' · ' + liveEsc(marca) +
+      '<span class="lb-sub">Esta compu está en solo lectura. Para registrar acá, toma el control.</span></div>';
+  } else {
+    ban.innerHTML = '<div class="lb-txt"><span class="lb-strong">' + liveEsc(quien) + ' lleva ' +
+      liveMinsSince(o && o.beat) + ' min sin señal</span> · ' + liveEsc(q) + ' · ' + liveEsc(marca) +
+      '<span class="lb-sub">Puedes continuar aquí sin código.</span></div>';
+  }
+  const b = document.createElement('button');
+  b.className = 'live-btn live-ui';
+  b.type = 'button';
+  b.textContent = 'Continuar aquí';
+  b.addEventListener('click', liveModalContinuar);
+  ban.appendChild(b);
+}
+
+function liveEsc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/* ═══ MODALES ═════════════════════════════════════════════════════════════ */
+function liveOverlay() { return document.getElementById('liveOverlay'); }
+
+function liveCloseModal() {
+  const ov = liveOverlay();
+  if (!ov) return;
+  ov.classList.remove('show');
+  ov.innerHTML = '';
+}
+
+function liveCard(html) {
+  const ov = liveOverlay();
+  if (!ov) return null;
+  ov.innerHTML = '<div class="live-card live-ui">' + html + '</div>';
+  ov.classList.add('show');
+  return ov.firstChild;
+}
+
+function liveAddBtn(card, texto, clase, fn) {
+  let row = card.querySelector('.live-row');
+  if (!row) { row = document.createElement('div'); row.className = 'live-row live-ui'; card.appendChild(row); }
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'live-btn live-ui' + (clase ? ' ' + clase : '');
+  b.textContent = texto;
+  b.addEventListener('click', fn);
+  row.appendChild(b);
+  return b;
+}
+
+function liveModalAviso(titulo, texto) {
+  const c = liveCard('<h3>' + liveEsc(titulo) + '</h3><p>' + liveEsc(texto) + '</p>');
+  if (c) liveAddBtn(c, 'Entendido', 'ghost', liveCloseModal);
+}
+
+/* 3.3 — pantalla de traspaso: código ENORME, una línea de instrucción y cancelar. */
+function liveModalHandoff(code) {
+  if (!code) return;
+  const c = liveCard(
+    '<h3>📲 Pasa el partido a la otra compu</h3>' +
+    '<p>Abre el mismo tracker en la otra compu y escribe este código.</p>' +
+    '<div class="live-code">' + liveEsc(code) + '</div>' +
+    '<p>Mientras tanto esta compu queda en solo lectura, para que las dos no se pisen. El reloj llega pausado a la otra y el botón Deshacer arranca limpio allá.</p>'
+  );
+  if (!c) return;
+  liveAddBtn(c, 'Cancelar traspaso', 'danger', () => { liveCancelHandoff().catch(() => {}); });
+  liveAddBtn(c, 'Dejar el código a la vista', 'ghost', liveCloseModal);
+}
+
+/* 3.4 / F5 / F6 / F7 — pedir el código, o continuar sin él si el dueño murió. */
+function liveModalContinuar() {
+  const o      = LIVE.ownerInfo;
+  const alive  = liveIsAlive(o);
+  const quien  = liveOwnerName(o);
+
+  if (!alive) {
+    const c = liveCard(
+      '<h3>Continuar el partido aquí</h3>' +
+      '<p><b>' + liveEsc(quien) + '</b> lleva ' + liveMinsSince(o && o.beat) +
+      ' min sin señal, así que puedes continuar sin código.</p>' +
+      '<p>El reloj llega pausado y el botón Deshacer arranca limpio: la pila de deshacer no viaja entre computadoras.</p>' +
+      '<div class="live-err" id="liveErr"></div>'
+    );
+    if (!c) return;
+    liveAddBtn(c, 'Continuar aquí', '', async () => {
+      const r = await liveTakeControl(null);
+      if (r.ok) liveModalTomado();
+      else liveSetErr(r.error);
+    });
+    liveAddBtn(c, 'Cancelar', 'ghost', liveCloseModal);
+    return;
+  }
+
+  const c = liveCard(
+    '<h3>Continuar el partido aquí</h3>' +
+    '<p>El partido lo lleva <b>' + liveEsc(quien) + '</b>. Allá, apreta <b>📲 Pasar a otra compu</b> y escribe acá el código de 4 dígitos.</p>' +
+    '<input class="live-input live-ui" id="liveCode" inputmode="numeric" maxlength="4" placeholder="0000" autocomplete="off">' +
+    '<div class="live-err" id="liveErr"></div>'
+  );
+  if (!c) return;
+  const inp = document.getElementById('liveCode');
+  const enviar = async () => {
+    const v = (document.getElementById('liveCode') || {}).value || '';
+    liveSetErr('');
+    const r = await liveTakeControl(v);
+    if (r.ok) liveModalTomado();
+    else liveSetErr(r.error);
+  };
+  if (inp) {
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); enviar(); } });
+    setTimeout(() => { try { inp.focus(); } catch(e) {} }, 60);
+  }
+  liveAddBtn(c, 'Tomar el control', '', enviar);
+  liveAddBtn(c, 'Cancelar', 'ghost', liveCloseModal);
+}
+
+function liveSetErr(msg) {
+  const e = document.getElementById('liveErr');
+  if (e) e.textContent = msg || '';
+}
+
+function liveModalTomado() {
+  const c = liveCard(
+    '<h3>✅ Ya llevas el partido en esta compu</h3>' +
+    '<p>Llegó todo: marcador, cuarto, reloj, nómina y estadísticas.</p>' +
+    '<p><b>El reloj llega pausado</b> — dale play cuando arranque de nuevo. Y el botón Deshacer arranca limpio: la pila de deshacer no viaja entre computadoras.</p>'
+  );
+  if (c) liveAddBtn(c, 'Listo', '', liveCloseModal);
+}
+
+function liveModalTransferido(entregado) {
+  const quien = liveEsc(LIVE.transferredTo || 'otra compu');
+  let html;
+  if (entregado) {
+    html = '<h3>✅ Transferido a ' + quien + '</h3>' +
+           '<p>Esta compu queda en solo lectura. Todo lo que registraste ya está allá.</p>';
+  } else {
+    html = '<h3>Otra compu tomó el partido</h3>' +
+           '<p>Ahora lo lleva <b>' + quien + '</b> y esta compu queda en solo lectura.</p>' +
+           (LIVE.backupSaved
+             ? '<p>Tu versión de esta compu <b>quedó guardada aparte</b> en este navegador (<code>' + liveEsc(LIVE_BACKUP_KEY) + '</code>) y <b>no se subió</b>, para no pisar lo que lleva la otra. No se perdió nada.</p>'
+             : '');
+  }
+  const c = liveCard(html + '<div class="live-err" id="liveErr"></div>');
+  if (!c) return;
+  liveAddBtn(c, 'Recuperar control', 'ghost', () => { liveCloseModal(); liveModalContinuar(); });
+  liveAddBtn(c, 'Entendido', '', liveCloseModal);
+}
+
+/* 3.2 — detalle del indicador: quién lleva el partido y hace cuánto se subió. */
+function liveModalDetalle() {
+  const o = LIVE.ownerInfo;
+  const yo = (o && o.deviceId === DEV_ID);
+  const filas = [
+    '<b>Esta compu:</b> ' + liveEsc(LIVE.myName),
+    '<b>Lleva el partido:</b> ' + (LIVE.role === 'owner' && !LIVE.readonly
+        ? 'esta compu'
+        : liveEsc(yo ? 'esta compu' : liveOwnerName(o))),
+    '<b>Estado:</b> ' + (LIVE.readonly ? 'solo lectura' : (LIVE.net ? 'sincronizado' : 'sin conexión, trabajando local')),
+    '<b>Última subida:</b> ' + liveEsc(liveHace(LIVE.lastUpOk)),
+    '<b>Última señal de la nube:</b> ' + liveEsc(liveHace(LIVE.lastPollOk)),
+    '<b>Versión del partido:</b> rev ' + (LIVE.rev || 0),
+  ];
+  const c = liveCard('<h3>Sesión en vivo</h3><div class="live-detail">' + filas.join('<br>') + '</div>');
+  if (c) liveAddBtn(c, 'Cerrar', 'ghost', liveCloseModal);
+}
+
+/* ═══ ARRANQUE ════════════════════════════════════════════════════════════ */
+/* Lo llama el DOMContentLoaded DESPUÉS de appEnabled(): si el kill switch está
+   apagado, la sesión en vivo ni se inicia. */
+async function liveStart() {
+  try {
+    LIVE.on = true;
+    liveInjectStyles();
+    liveInjectUI();
+    liveInstallGuards();
+    liveInstallClickGuard();
+    await liveLoadName();
+    await liveBoot();
+    setInterval(() => { livePoll().catch(() => {}); }, LIVE_POLL_MS);
+    setInterval(() => { liveBeat().catch(() => {}); }, LIVE_BEAT_MS);
+  } catch(e) {
+    console.warn('Sesión en vivo desactivada:', e);
+    LIVE.on = false;
+    LIVE.booting = false;
+    try { liveSetReadonly(false); } catch(_) {}
+  }
+}
+
+async function liveBoot() {
+  const r = await liveReq('');
+  if (!r.ok) {
+    LIVE.booting = false;
+    /* Sin señal al abrir: sigo trabajando 100% local, como siempre.
+       El sondeo reintenta solo. */
+    LIVE.role = 'owner';
+    liveSetReadonly(false);
+    liveRenderStatus();
+    return;
+  }
+  LIVE.lastPollOk = Date.now();
+  const node  = r.data || {};
+  LIVE.rev    = node.rev || 0;
+  LIVE.remote = node;
+  const owner = node.owner || null;
+  LIVE.ownerInfo = owner;
+
+  const mine  = !!(owner && owner.deviceId === DEV_ID);
+  const libre = !owner || !owner.deviceId;
+
+  if (libre || mine) {
+    /* Sesión libre o mía: la tomo sin código y subo lo que tengo local. */
+    LIVE.role = 'owner';
+    liveSetReadonly(false);
+    LIVE.booting = false;
+    LIVE.dirty   = false;
+    await liveUpload(true);
+  } else {
+    /* Hay una sesión de otra compu (viva o sin señal). No toco nada:
+       el entrenador decide con el banner. */
+    LIVE.role = 'observer';
+    liveSetReadonly(true);
+  }
+  LIVE.booting = false;
+  liveRenderStatus();
+  liveRenderBanner();
+}
+/* ═══ LIVE-END ═══════════════════════════════════════════════════════════ */
