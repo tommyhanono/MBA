@@ -2399,6 +2399,7 @@ const LIVE = {
   lostNotified: false,
   backupSaved:  false,
   transferredTo: null,
+  yielded:    false,      // cedí o perdí el control: no vuelvo a reclamarlo solo
 };
 
 /* ═══ RED ═════════════════════════════════════════════════════════════════ */
@@ -2540,9 +2541,14 @@ function liveOnSave() {
 
 async function liveBeat() {
   if (!LIVE.on || LIVE.booting || LIVE.role !== 'owner') return;
+  /* Entregué el partido, o ya lo perdí: esta compu no vuelve a reclamarlo sola.
+     Sin esto el latido le roba la propiedad a la compu que acaba de tomarlo. */
+  if (LIVE.handingOff || LIVE.yielded) return;
   /* Si venimos de un corte, el latido esperaría a la confirmación del sondeo:
      escribir el owner a ciegas sería robarle el partido a quien lo tomó. */
   if (LIVE.dirty) return;
+  /* Nunca se escribe el owner sin preguntar antes quién lo tiene. */
+  if (!(await liveConfirmarDueno())) return;
   await liveReq('/owner', liveJson('PATCH', { deviceId: DEV_ID, name: LIVE.myName, beat: Date.now() }));
   liveRenderStatus();
 }
@@ -2579,6 +2585,7 @@ function liveLoseOwnership(newOwner) {
   const entregado = LIVE.handingOff;
   LIVE.role          = 'observer';
   LIVE.handingOff    = false;
+  LIVE.yielded       = true;   // solo vuelve a ser dueña si el usuario lo pide
   LIVE.handoff       = null;
   LIVE.ownerInfo     = newOwner || null;
   LIVE.transferredTo = liveOwnerName(newOwner);
@@ -2663,6 +2670,7 @@ async function liveTakeControl(code) {
   LIVE.handingOff    = false;
   LIVE.handoff       = null;
   LIVE.lostNotified  = false;
+  LIVE.yielded       = false;   // el usuario lo pidió: vuelve a ser dueña activa
   LIVE.transferredTo = null;
   LIVE.lastPollOk    = Date.now();
   liveSetReadonly(false);
@@ -2698,6 +2706,7 @@ async function liveStartHandoff() {
   /* 3. Esta compu queda en solo lectura de inmediato: así no hay carrera. */
   LIVE.handoff    = { code, at: Date.now() };
   LIVE.handingOff = true;
+  LIVE.yielded    = true;   // desde acá no reclama el partido por su cuenta
   liveSetReadonly(true);
   liveModalHandoff(code);
   liveRenderStatus();
@@ -2706,6 +2715,16 @@ async function liveStartHandoff() {
 
 async function liveCancelHandoff() {
   if (!LIVE.handingOff) { liveCloseModal(); return; }
+  /* Si la otra compu ya tomó el partido, cancelar no puede devolvérmelo.
+     liveConfirmarDueno me pasa a solo lectura si ya lo perdí. */
+  if (!(await liveConfirmarDueno())) {
+    if (LIVE.role === 'owner') {
+      liveModalAviso('Sin internet', 'No pude cancelar el traspaso porque no hay conexión. Vuelve a intentar en un momento.');
+    } else {
+      liveCloseModal();
+    }
+    return;
+  }
   const w = await liveReq('/handoff', { method: 'DELETE' });
   if (!w.ok) {
     liveModalAviso('Sin internet', 'No pude cancelar el traspaso porque no hay conexión. Vuelve a intentar en un momento.');
@@ -2713,6 +2732,7 @@ async function liveCancelHandoff() {
   }
   LIVE.handoff    = null;
   LIVE.handingOff = false;
+  LIVE.yielded    = false;
   liveSetReadonly(false);
   liveCloseModal();
   liveRenderStatus();
